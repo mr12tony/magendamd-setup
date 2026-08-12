@@ -1,0 +1,38 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Windows
+        run: npm run build:win:portable
+
+      - name: Find EXE
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path src-tauri\target -Filter *.exe -Recurse
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: magendamd-setup-windows
+          path: src-tauri/target/release/*.exe
