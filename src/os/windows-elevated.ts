@@ -1,17 +1,17 @@
 import { Command } from "@tauri-apps/plugin-shell";
+import { RUSTDESK_PATH } from "./windows";
 
 export async function runRustDeskAsAdmin(args: string[]): Promise<number> {
-  const rustDeskPath = "C:\\Program Files\\RustDesk\\RustDesk.exe";
-
   const escapedArgs = args
-    .map((arg) => `"${arg.replace(/"/g, '\\"')}"`)
-    .join(" ");
+    .map((arg) => arg.replace(/'/g, "''"))
+    .map((arg) => `'${arg}'`)
+    .join(",");
 
   const command =
     `
     Start-Process ` +
-    `-FilePath "${rustDeskPath}" ` +
-    `-ArgumentList '${escapedArgs}' ` +
+    `-FilePath '${RUSTDESK_PATH.replace(/'/g, "''")}' ` +
+    `-ArgumentList ${escapedArgs} ` +
     `-Verb RunAs ` +
     `-Wait
   `;
@@ -19,6 +19,8 @@ export async function runRustDeskAsAdmin(args: string[]): Promise<number> {
   const result = await Command.create("powershell", [
     "-NoProfile",
     "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
     "-Command",
     command,
   ]).execute();

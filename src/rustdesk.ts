@@ -1,26 +1,10 @@
 import { Command } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
 import { getRustDeskPath } from "./os/rustdesk-path";
+import { sleep } from "./sleep";
 
 export async function isRustDeskInstalled(): Promise<boolean> {
   return (await getRustDeskPath()) !== null;
-}
-
-export async function setRustDeskPassword(password: string): Promise<void> {
-  const command = getRustDeskCommand();
-
-  const result = await Command.create(command, [
-    "--password",
-    password,
-  ]).execute();
-
-  console.log("password exit:", result.code);
-  console.log("password stdout:", result.stdout);
-  console.log("password stderr:", result.stderr);
-
-  if (result.code !== 0) {
-    throw new Error(result.stderr || "Failed to set RustDesk password");
-  }
 }
 
 export async function getRustDeskId(): Promise<string | null> {
@@ -60,6 +44,7 @@ export async function getRustDeskConfig(): Promise<{
   rendezvousServer: string;
   relayServer: string;
   key: string;
+  password: string;
 }> {
   const response = await fetch(
     `${import.meta.env.VITE_FRONTEND_URL}/api/rustdesk/config`,
@@ -120,12 +105,6 @@ export async function restartRustDesk(): Promise<void> {
   }
 
   console.log("RustDesk restarted");
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 export async function killRustDesk(): Promise<void> {

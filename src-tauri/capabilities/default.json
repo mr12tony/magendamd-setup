@@ -86,11 +86,6 @@
           "args": true
         },
         {
-          "name": "whoami",
-          "cmd": "/usr/bin/whoami",
-          "args": false
-        },
-        {
           "name": "cmd",
           "cmd": "C:\\Windows\\System32\\cmd.exe",
           "args": true

@@ -5,14 +5,13 @@ import { platform } from "@tauri-apps/plugin-os";
 import {
   isRustDeskInstalled,
   getRustDeskId,
-  openRustDesk,
+  // openRustDesk,
   restartRustDesk,
   killRustDesk,
   getRustDeskConfig,
-  // setRustDeskPassword,
 } from "./rustdesk";
 import { setRustDeskPasswordMacOS } from "./os/macos-elevated";
-// import { setRustDeskPasswordWindows } from "./os/windows-elevated";
+import { setRustDeskPasswordWindows } from "./os/windows-elevated";
 import { installRustDesk, uninstallRustDesk } from "./installer";
 import {
   configureRustDeskMacOS,
@@ -20,6 +19,7 @@ import {
 } from "./os/rustdesk-config";
 import { getAccessToken } from "./installer-token";
 import { getSystemInfo } from "./system";
+import { sleep } from "./sleep";
 
 import "./App.css";
 
@@ -32,8 +32,8 @@ function App() {
     rendezvousServer: string;
     relayServer: string;
     key: string;
+    password: string;
   } | null>(null);
-  const password = "Qaz123456";
 
   async function handleInstall() {
     if (!config || !token) return;
@@ -44,15 +44,11 @@ function App() {
       const os = platform();
 
       await installRustDesk();
-
-      // await killRustDesk();
       await restartRustDesk();
-
-      // Даём service время подняться
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       if (os === "macos") {
-        await setRustDeskPasswordMacOS(password);
+        await setRustDeskPasswordMacOS(config.password);
         await configureRustDeskMacOS(config);
 
         const ok = await verifyRustDeskMacOSConfig(config);
@@ -62,21 +58,19 @@ function App() {
         }
       }
 
-      // if (os === "windows") {
-      //   await setRustDeskPassword(password); // setRustDeskPasswordWindows
-      //   await configureRustDeskWindows(config);
+      if (os === "windows") {
+        await setRustDeskPasswordWindows(config.password);
+        // await configureRustDeskWindows(config);
 
-      //   const ok = await verifyRustDeskWindowsConfig(config);
+        // const ok = await verifyRustDeskWindowsConfig(config);
 
-      //   if (!ok) {
-      //     throw new Error("RustDesk configuration verification failed");
-      //   }
-      // }
+        // if (!ok) {
+        //   throw new Error("RustDesk configuration verification failed");
+        // }
+      }
 
       await restartRustDesk();
-
-      // Ждём запуска
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       const rustdeskId = await getRustDeskId();
 
@@ -88,21 +82,19 @@ function App() {
         },
         body: JSON.stringify({
           device_id: rustdeskId,
-          password: password,
+          password: config.password,
           name: hostname,
         }),
       });
-
-      console.log("rustdeskId >>>", rustdeskId);
 
       await message("RustDesk успешно установлен и настроен.", {
         title: "Установка завершена",
         kind: "info",
       });
 
-      // await getCurrentWindow().close();
+      await getCurrentWindow().close();
     } catch (error) {
-      console.error(error);
+      console.log("handleInstall failed:", error);
 
       await message(
         error instanceof Error
@@ -140,25 +132,14 @@ function App() {
 
       const os = platform();
 
-      // Останавливаем текущий RustDesk
       await killRustDesk();
-
-      // Удаляем
       await uninstallRustDesk();
-
-      // Устанавливаем заново
       await installRustDesk();
-
-      // Останавливаем новую установку
-      // await killRustDesk();
       await restartRustDesk();
+      await sleep(2000);
 
-      // Даём service время подняться
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Конфигурация
       if (os === "macos") {
-        await setRustDeskPasswordMacOS(password);
+        await setRustDeskPasswordMacOS(config.password);
         await configureRustDeskMacOS(config);
 
         const ok = await verifyRustDeskMacOSConfig(config);
@@ -168,29 +149,22 @@ function App() {
         }
       }
 
-      // if (os === "windows") {
-      //   await setRustDeskPassword(password); // setRustDeskPasswordWindows
-      //   await configureRustDeskWindows(config);
+      if (os === "windows") {
+        await setRustDeskPasswordWindows(config.password);
+        // await configureRustDeskWindows(config);
 
-      //   const ok = await verifyRustDeskWindowsConfig(config);
+        // const ok = await verifyRustDeskWindowsConfig(config);
 
-      //   if (!ok) {
-      //     throw new Error("RustDesk configuration verification failed");
-      //   }
-      // }
+        // if (!ok) {
+        //   throw new Error("RustDesk configuration verification failed");
+        // }
+      }
 
-      // Запускаем
       await restartRustDesk();
+      await sleep(2000);
 
-      // Ждём запуска
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Получаем ID
       const rustdeskId = await getRustDeskId();
 
-      console.log("rustdeskId >>>", rustdeskId);
-
-      // Успешно
       await message(
         `RustDesk успешно переустановлен и настроен.\n\nID: ${rustdeskId}`,
         {
@@ -201,7 +175,7 @@ function App() {
 
       await getCurrentWindow().close();
     } catch (error) {
-      console.error("RustDesk reinstall failed:", error);
+      console.error("handleReinstall failed:", error);
 
       await message(
         error instanceof Error
@@ -221,10 +195,10 @@ function App() {
     await getCurrentWindow().close();
   };
 
-  const handleRun = async () => {
-    await killRustDesk();
-    await openRustDesk();
-  };
+  // const handleRun = async () => {
+  //   await killRustDesk();
+  //   await openRustDesk();
+  // };
 
   useEffect(() => {
     (async () => {
@@ -245,8 +219,6 @@ function App() {
   }, []);
 
   async function initialize() {
-    // 1. Проверяем backend / интернет
-
     try {
       const config = await getRustDeskConfig();
 
@@ -266,8 +238,6 @@ function App() {
 
       return;
     }
-
-    // 2. Проверяем установлен ли RustDesk
 
     try {
       const installed = await isRustDeskInstalled();
@@ -292,8 +262,8 @@ function App() {
     <div className="flex flex-col gap-8 items-center justify-center min-h-screen">
       <div className="relative select-none">
         <img src="/logo-white.png" alt="App Logo" className="h-[72px]" />
-        <div className="absolute right-0 -bottom-1.5 text-base font-medium text-white tracking-[2.75px]">
-          Remote Setup
+        <div className="absolute right-0 -bottom-1.5 text-base font-medium text-white tracking-[2px]">
+          RustDesk Setup
         </div>
       </div>
 
@@ -309,6 +279,7 @@ function App() {
             type="text"
             value={hostname}
             onChange={(e) => setHostname(e.target.value)}
+            disabled={processing}
             id="hostname"
             className="w-full rounded-lg border-gray-300 px-3 py-2 shadow-sm"
           />
@@ -390,7 +361,7 @@ function App() {
           )}
         </div>
 
-        <pre>{JSON.stringify({ token, config }, null, 2)}</pre>
+        <pre>{JSON.stringify({ config, token }, null, 2)}</pre>
       </form>
     </div>
   );
