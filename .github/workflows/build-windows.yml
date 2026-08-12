@@ -1,4 +1,4 @@
-name: Build Windows
+name: Build Windows Portable
 
 on:
   workflow_dispatch:
@@ -24,16 +24,53 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Windows
-        run: npm run build:win
+        run: npm run build:win:portable
 
-      - name: Find bundles
+      - name: Prepare portable package
         shell: pwsh
         run: |
-          Get-ChildItem -Path src-tauri\target\release\bundle -Recurse |
+          $portable = "portable\magendamd-setup-windows"
+
+          # Create directories
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "$portable\resources\windows"
+
+          # Copy application
+          Copy-Item `
+            "src-tauri\target\release\magendamd-setup.exe" `
+            "$portable\magendamd-setup.exe" `
+            -Force
+
+          # Copy Windows resources
+          Copy-Item `
+            "src-tauri\resources\windows\*" `
+            "$portable\resources\windows\" `
+            -Recurse `
+            -Force
+
+          Write-Host ""
+          Write-Host "=== Portable package ==="
+          Write-Host ""
+
+          Get-ChildItem `
+            "$portable" `
+            -Recurse |
             Select-Object FullName, Length
 
-      - name: Upload Windows installer
+          Write-Host ""
+          Write-Host "=== Total size ==="
+
+          $size = (
+            Get-ChildItem "$portable" -Recurse -File |
+            Measure-Object -Property Length -Sum
+          ).Sum
+
+          Write-Host "Total: $([math]::Round($size / 1MB, 2)) MB"
+
+      - name: Upload Windows Portable
         uses: actions/upload-artifact@v4
         with:
           name: magendamd-setup-windows
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: portable/magendamd-setup-windows

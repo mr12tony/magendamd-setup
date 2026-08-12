@@ -1,20 +1,24 @@
 import { Command } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
-import { getEmbeddedRustDesk } from "./embedded-rustdesk";
+import {
+  getEmbeddedRustDesk,
+  getRustDeskInstallerPath,
+} from "./embedded-rustdesk";
 import { RUSTDESK_APP_PATH as MACOS_RUSTDESK_PATH } from "./os/macos";
 // import { RUSTDESK_PATH as WINDOWS_RUSTDESK_PATH } from "./os/windows";
 
 export async function installRustDesk(): Promise<void> {
   const os = platform();
-  const installer = await getEmbeddedRustDesk();
 
   if (os === "macos") {
+    const installer = await getEmbeddedRustDesk();
+
     await installMacOS(installer);
     return;
   }
 
   if (os === "windows") {
-    await installWindows(installer);
+    await installWindows();
     return;
   }
 
@@ -78,7 +82,30 @@ async function installMacOS(dmg: string): Promise<void> {
 // WINDOWS INSTALL
 // ─────────────────────────────────────────────
 
-async function installWindows(exe: string): Promise<void> {
+// async function installWindows(exe: string): Promise<void> {
+//   console.log("Installing RustDesk from:", exe);
+
+//   const command = Command.create("windows-installer", [
+//     "/C",
+//     `"${exe}" --silent-install`,
+//   ]);
+
+//   const result = await command.execute();
+
+//   console.log("Installer exit code:", result.code);
+//   console.log("Installer stdout:", result.stdout);
+//   console.log("Installer stderr:", result.stderr);
+
+//   if (result.code !== 0) {
+//     throw new Error(result.stderr || "RustDesk installation failed");
+//   }
+
+//   console.log("RustDesk installed");
+// }
+
+async function installWindows(): Promise<void> {
+  const exe = await getRustDeskInstallerPath();
+
   console.log("Installing RustDesk from:", exe);
 
   const command = Command.create("windows-installer", [
@@ -89,11 +116,13 @@ async function installWindows(exe: string): Promise<void> {
   const result = await command.execute();
 
   console.log("Installer exit code:", result.code);
-  console.log("Installer stdout:", result.stdout);
-  console.log("Installer stderr:", result.stderr);
+  console.log("stdout:", result.stdout);
+  console.log("stderr:", result.stderr);
 
   if (result.code !== 0) {
-    throw new Error(result.stderr || "RustDesk installation failed");
+    throw new Error(
+      result.stderr || result.stdout || "RustDesk installation failed",
+    );
   }
 
   console.log("RustDesk installed");
