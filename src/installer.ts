@@ -1,6 +1,6 @@
 import { Command } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
-import { exists } from "@tauri-apps/plugin-fs";
+// import { exists } from "@tauri-apps/plugin-fs";
 import {
   getEmbeddedRustDesk,
   getRustDeskInstallerPath,
@@ -219,13 +219,47 @@ async function uninstallMacOS(): Promise<void> {
 // WINDOWS UNINSTALL
 // ─────────────────────────────────────────────
 
-async function uninstallWindows(): Promise<void> {
-  const result = await Command.create("rustdesk-windows", [
-    "--uninstall",
+// async function uninstallWindows(): Promise<void> {
+//   const result = await Command.create("rustdesk-windows", [
+//     "--uninstall",
+//   ]).execute();
+
+//   if (result.code !== 0) {
+//     throw new Error(result.stderr || "Failed to uninstall RustDesk on Windows");
+//   }
+
+//   console.log("RustDesk removed from Windows");
+// }
+
+export async function uninstallWindows(): Promise<void> {
+  const rustDeskPath = "C:\\Program Files\\RustDesk\\RustDesk.exe";
+
+  const psCommand =
+    `Start-Process ` +
+    `-FilePath '${rustDeskPath.replace(/'/g, "''")}' ` +
+    `-ArgumentList '--uninstall' ` +
+    `-Verb RunAs ` +
+    `-Wait`;
+
+  console.log("Uninstall command:", psCommand);
+
+  const result = await Command.create("powershell", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    psCommand,
   ]).execute();
 
+  console.log("Uninstall exit:", result.code);
+  console.log("stdout:", result.stdout);
+  console.log("stderr:", result.stderr);
+
   if (result.code !== 0) {
-    throw new Error(result.stderr || "Failed to uninstall RustDesk on Windows");
+    throw new Error(
+      result.stderr ||
+        result.stdout ||
+        "Failed to uninstall RustDesk on Windows",
+    );
   }
 
   console.log("RustDesk removed from Windows");
