@@ -8,6 +8,7 @@ import {
 import { RUSTDESK_APP_PATH as MACOS_RUSTDESK_PATH } from "./os/macos";
 // import { RUSTDESK_PATH as WINDOWS_RUSTDESK_PATH } from "./os/windows";
 import { debugLog } from "./debug-log";
+import { waitForRustDesk } from "./rustdesk";
 
 export async function installRustDesk(): Promise<void> {
   const os = platform();
@@ -21,6 +22,7 @@ export async function installRustDesk(): Promise<void> {
 
   if (os === "windows") {
     await installWindows();
+    await waitForRustDesk();
     return;
   }
 
@@ -143,7 +145,8 @@ async function installWindows(): Promise<void> {
     `Start-Process ` +
     `-FilePath '${exe.replace(/'/g, "''")}' ` +
     `-ArgumentList '--silent-install' ` +
-    `-Verb RunAs `; // -Wait
+    `-Verb RunAs ` +
+    `-Wait`;
 
   console.log("PowerShell command:", psCommand);
 

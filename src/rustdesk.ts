@@ -1,5 +1,6 @@
 import { Command } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
+import { exists } from "@tauri-apps/plugin-fs";
 import { getRustDeskPath } from "./os/rustdesk-path";
 import { sleep } from "./sleep";
 
@@ -199,4 +200,16 @@ export async function restartRustDesk(): Promise<void> {
   }
 
   throw new Error(`Unsupported platform: ${os}`);
+}
+
+export async function waitForRustDesk(): Promise<void> {
+  for (let i = 0; i < 30; i++) {
+    if (await exists(RUSTDESK_WINDOWS_PATH)) {
+      return;
+    }
+
+    await sleep(1000);
+  }
+
+  throw new Error("RustDesk.exe was not found");
 }
