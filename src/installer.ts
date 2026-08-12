@@ -1,5 +1,6 @@
 import { Command } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
+import { exists } from "@tauri-apps/plugin-fs";
 import {
   getEmbeddedRustDesk,
   getRustDeskInstallerPath,
@@ -103,19 +104,59 @@ async function installMacOS(dmg: string): Promise<void> {
 //   console.log("RustDesk installed");
 // }
 
+// async function installWindows(): Promise<void> {
+//   const exe = await getRustDeskInstallerPath();
+
+//   console.log("Installing RustDesk from:", exe);
+
+//   const command = Command.create("windows-installer", [
+//     "/C",
+//     `"${exe}" --silent-install`,
+//   ]);
+
+//   const result = await command.execute();
+
+//   console.log("Installer exit code:", result.code);
+//   console.log("stdout:", result.stdout);
+//   console.log("stderr:", result.stderr);
+
+//   if (result.code !== 0) {
+//     throw new Error(
+//       result.stderr || result.stdout || "RustDesk installation failed",
+//     );
+//   }
+
+//   console.log("RustDesk installed");
+// }
+
 async function installWindows(): Promise<void> {
   const exe = await getRustDeskInstallerPath();
 
-  console.log("Installing RustDesk from:", exe);
+  console.log("RustDesk path:", exe);
 
-  const command = Command.create("windows-installer", [
-    "/C",
-    `"${exe}" --silent-install`,
+  if (!(await exists(exe))) {
+    throw new Error(`RustDesk executable not found: ${exe}`);
+  }
+
+  const psCommand =
+    `Start-Process ` +
+    `-FilePath '${exe.replace(/'/g, "''")}' ` +
+    `-ArgumentList '--silent-install' ` +
+    `-Verb RunAs ` +
+    `-Wait`;
+
+  console.log("PowerShell command:", psCommand);
+
+  const command = Command.create("powershell", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    psCommand,
   ]);
 
   const result = await command.execute();
 
-  console.log("Installer exit code:", result.code);
+  console.log("exit:", result.code);
   console.log("stdout:", result.stdout);
   console.log("stderr:", result.stderr);
 
@@ -125,7 +166,7 @@ async function installWindows(): Promise<void> {
     );
   }
 
-  console.log("RustDesk installed");
+  console.log("RustDesk installed successfully");
 }
 
 // ─────────────────────────────────────────────
