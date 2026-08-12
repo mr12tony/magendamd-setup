@@ -1,0 +1,111 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "core:window:allow-close",
+    "opener:default",
+    "os:default",
+    "os:allow-hostname",
+    "fs:default",
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        "/Applications/RustDesk.app",
+        "/Applications/RustDesk.app/Contents/MacOS/RustDesk",
+        "C:\\Program Files\\RustDesk\\RustDesk.exe",
+        "$HOME/**/access-token.txt",
+        "$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml"
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [
+        "$HOME/**/access-token.txt",
+        "$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml"
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        "$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml"
+      ]
+    },
+    "shell:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "windows-installer",
+          "cmd": "C:\\Windows\\System32\\cmd.exe",
+          "args": true
+        },
+        {
+          "name": "rustdesk-macos",
+          "cmd": "/Applications/RustDesk.app/Contents/MacOS/RustDesk",
+          "args": true
+        },
+        {
+          "name": "rustdesk-windows",
+          "cmd": "C:\\Program Files\\RustDesk\\RustDesk.exe",
+          "args": true
+        },
+        {
+          "name": "hdiutil",
+          "cmd": "/usr/bin/hdiutil",
+          "args": true
+        },
+        {
+          "name": "ditto",
+          "cmd": "/usr/bin/ditto",
+          "args": true
+        },
+        {
+          "name": "rm",
+          "cmd": "/bin/rm",
+          "args": true
+        },
+        {
+          "name": "killall",
+          "cmd": "/usr/bin/killall",
+          "args": true
+        },
+        {
+          "name": "osascript",
+          "cmd": "/usr/bin/osascript",
+          "args": true
+        },
+        {
+          "name": "open",
+          "cmd": "/usr/bin/open",
+          "args": true
+        },
+        {
+          "name": "whoami",
+          "cmd": "/usr/bin/whoami",
+          "args": false
+        },
+        {
+          "name": "cmd",
+          "cmd": "C:\\Windows\\System32\\cmd.exe",
+          "args": true
+        },
+        {
+          "name": "sh",
+          "cmd": "/bin/sh",
+          "args": true
+        },
+        {
+          "name": "powershell",
+          "cmd": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "args": true
+        }
+      ]
+    }
+  ]
+}
