@@ -79,22 +79,26 @@ export async function openRustDesk(): Promise<void> {
 
 const RUSTDESK_APP_PATH = "/Applications/RustDesk.app";
 
-export async function restartRustDesk(): Promise<void> {
-  // 1. Завершаем RustDesk, если он запущен.
-  // killall вернёт ненулевой код, если процесса нет —
-  // это нормально.
+export async function killRustDeskMacOS(): Promise<void> {
   try {
-    const killResult = await Command.create("killall", ["RustDesk"]).execute();
+    const result = await Command.create("killall", ["RustDesk"]).execute();
 
-    console.log("RustDesk kill:", killResult.code, killResult.stderr);
-  } catch {
-    // RustDesk уже не запущен.
+    if (result.code !== 0 && result.code !== 1) {
+      throw new Error(
+        result.stderr || `killall exited with code ${result.code}`,
+      );
+    }
+
+    console.log("RustDesk stopped");
+  } catch (error) {
+    console.log("RustDesk was not running:", error);
   }
+}
 
-  // 2. Небольшая пауза, чтобы процесс полностью завершился.
+export async function restartRustDeskMacOS(): Promise<void> {
+  await killRustDeskMacOS();
   await sleep(500);
 
-  // 3. Запускаем установленный RustDesk.
   const openResult = await Command.create("open", [
     "-n",
     RUSTDESK_APP_PATH,
@@ -107,21 +111,92 @@ export async function restartRustDesk(): Promise<void> {
   console.log("RustDesk restarted");
 }
 
-export async function killRustDesk(): Promise<void> {
+const RUSTDESK_WINDOWS_PATH = "C:\\Program Files\\RustDesk\\RustDesk.exe";
+
+export async function killRustDeskWindows(): Promise<void> {
   try {
-    const result = await Command.create("killall", ["RustDesk"]).execute();
+    const result = await Command.create("taskkill", [
+      "/F",
+      "/IM",
+      "RustDesk.exe",
+    ]).execute();
 
-    // 0 — процесс был найден и завершён.
-    // 1 — RustDesk не запущен. Это тоже нормально.
-    if (result.code !== 0 && result.code !== 1) {
-      throw new Error(
-        result.stderr || `killall exited with code ${result.code}`,
-      );
-    }
+    console.log("RustDesk taskkill:", result.code);
+    console.log("stdout:", result.stdout);
+    console.log("stderr:", result.stderr);
 
-    console.log("RustDesk stopped");
+    // ERRORLEVEL 128/1 может означать, что процесса не было.
+    // Поэтому отсутствие процесса не считаем ошибкой.
   } catch (error) {
-    // Если RustDesk уже не запущен — продолжаем.
     console.log("RustDesk was not running:", error);
   }
+}
+
+// export async function restartRustDeskWindows(): Promise<void> {
+//   await killRustDeskWindows();
+//   await sleep(500);
+
+//   const result = await Command.create("rustdesk-windows", []).execute();
+
+//   console.log("RustDesk start:", result.code);
+//   console.log("stdout:", result.stdout);
+//   console.log("stderr:", result.stderr);
+
+//   if (result.code !== 0) {
+//     throw new Error(result.stderr || "Failed to start RustDesk");
+//   }
+
+//   console.log("RustDesk restarted");
+// }
+
+export async function restartRustDeskWindows(): Promise<void> {
+  await killRustDeskWindows();
+  await sleep(1000);
+
+  const psCommand =
+    `Start-Process ` +
+    `-FilePath '${RUSTDESK_WINDOWS_PATH.replace(/'/g, "''")}'`;
+
+  const result = await Command.create("powershell", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    psCommand,
+  ]).execute();
+
+  console.log("RustDesk start:", result.code);
+  console.log("stdout:", result.stdout);
+  console.log("stderr:", result.stderr);
+
+  if (result.code !== 0) {
+    throw new Error(result.stderr || "Failed to start RustDesk");
+  }
+}
+
+export async function killRustDesk(): Promise<void> {
+  const os = platform();
+
+  if (os === "macos") {
+    return killRustDeskMacOS();
+  }
+
+  if (os === "windows") {
+    return killRustDeskWindows();
+  }
+
+  throw new Error(`Unsupported platform: ${os}`);
+}
+
+export async function restartRustDesk(): Promise<void> {
+  const os = platform();
+
+  if (os === "macos") {
+    return restartRustDeskMacOS();
+  }
+
+  if (os === "windows") {
+    return restartRustDeskWindows();
+  }
+
+  throw new Error(`Unsupported platform: ${os}`);
 }

@@ -99,6 +99,11 @@
           "name": "powershell",
           "cmd": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
           "args": true
+        },
+        {
+          "name": "taskkill",
+          "cmd": "C:\\Windows\\System32\\taskkill.exe",
+          "args": true
         }
       ]
     }
