@@ -134,9 +134,9 @@ async function installWindows(): Promise<void> {
 
   console.log("RustDesk path:", exe);
 
-  if (!(await exists(exe))) {
-    throw new Error(`RustDesk executable not found: ${exe}`);
-  }
+  // if (!(await exists(exe))) {
+  //   throw new Error(`RustDesk executable not found: ${exe}`);
+  // }
 
   const psCommand =
     `Start-Process ` +
