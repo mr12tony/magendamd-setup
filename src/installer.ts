@@ -7,6 +7,7 @@ import {
 } from "./embedded-rustdesk";
 import { RUSTDESK_APP_PATH as MACOS_RUSTDESK_PATH } from "./os/macos";
 // import { RUSTDESK_PATH as WINDOWS_RUSTDESK_PATH } from "./os/windows";
+import { debugLog } from "./debug-log";
 
 export async function installRustDesk(): Promise<void> {
   const os = platform();
@@ -142,8 +143,7 @@ async function installWindows(): Promise<void> {
     `Start-Process ` +
     `-FilePath '${exe.replace(/'/g, "''")}' ` +
     `-ArgumentList '--silent-install' ` +
-    `-Verb RunAs ` +
-    `-Wait`;
+    `-Verb RunAs `; // -Wait
 
   console.log("PowerShell command:", psCommand);
 
@@ -156,9 +156,9 @@ async function installWindows(): Promise<void> {
 
   const result = await command.execute();
 
-  console.log("exit:", result.code);
-  console.log("stdout:", result.stdout);
-  console.log("stderr:", result.stderr);
+  await debugLog(`"exit:", ${result.code}`);
+  await debugLog(`"stdout:", ${result.stdout}`);
+  await debugLog(`"stderr:", ${result.stderr}`);
 
   if (result.code !== 0) {
     throw new Error(

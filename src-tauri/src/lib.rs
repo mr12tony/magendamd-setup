@@ -1,3 +1,29 @@
+use std::fs::OpenOptions;
+use std::io::Write;
+
+#[tauri::command]
+fn write_debug_log(message: String) -> Result<(), String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| e.to_string())?;
+
+    let exe_dir = exe_path
+        .parent()
+        .ok_or("Failed to get executable directory")?;
+
+    let log_path = exe_dir.join("debug.log");
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| e.to_string())?;
+
+    writeln!(file, "{}", message)
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 #[tauri::command]
 fn get_current_exe() -> Result<String, String> {
     std::env::current_exe()
@@ -58,6 +84,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_current_exe,
             get_access_token,
+            write_debug_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
