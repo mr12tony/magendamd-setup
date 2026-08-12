@@ -34,12 +34,14 @@ function App() {
     key: string;
     password: string;
   } | null>(null);
+  const [error, setError] = useState<any>(null);
 
   async function handleInstall() {
     if (!config || !token) return;
 
     try {
       setProcessing(true);
+      setError(null);
 
       const os = platform();
 
@@ -94,7 +96,7 @@ function App() {
 
       await getCurrentWindow().close();
     } catch (error) {
-      console.log("handleInstall failed:", error);
+      setError(error);
 
       await message(
         error instanceof Error
@@ -129,6 +131,7 @@ function App() {
 
     try {
       setProcessing(true);
+      setError(null);
 
       const os = platform();
 
@@ -175,7 +178,7 @@ function App() {
 
       await getCurrentWindow().close();
     } catch (error) {
-      console.error("handleReinstall failed:", error);
+      setError(error);
 
       await message(
         error instanceof Error
@@ -223,10 +226,10 @@ function App() {
       const config = await getRustDeskConfig();
 
       setConfig(config);
+      setError(null);
     } catch (error) {
-      console.error("Network check failed:", error);
-
       setConfig(null);
+      setError(error);
 
       await message(
         "Не удалось подключиться к серверу.\n\nПроверьте подключение к интернету и попробуйте снова.",
@@ -254,7 +257,7 @@ function App() {
         kind: "warning",
       });
     } catch (error) {
-      console.error("RustDesk check failed:", error);
+      setError(error);
     }
   }
 
@@ -361,7 +364,7 @@ function App() {
           )}
         </div>
 
-        <pre>{JSON.stringify({ config, token }, null, 2)}</pre>
+        <pre>{JSON.stringify({ config, token, error }, null, 2)}</pre>
       </form>
     </div>
   );
