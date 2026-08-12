@@ -24,7 +24,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Windows
-        run: npm run build:win:portable
+        run: npm run build:win
 
       - name: Find EXE
         shell: pwsh

@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:mac:portable": "tauri build --config src-tauri/tauri.macos.conf.json --bundles app",
-    "build:win:portable": "tauri build --config src-tauri/tauri.windows.conf.json --no-bundle"
+    "build:mac:app": "tauri build --config src-tauri/tauri.macos.conf.json --bundles app",
+    "build:win": "tauri build --config src-tauri/tauri.windows.conf.json"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
