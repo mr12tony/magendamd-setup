@@ -1,192 +1,108 @@
 import { Command } from "@tauri-apps/plugin-shell";
+import { resolveResource } from "@tauri-apps/api/path";
 import { platform } from "@tauri-apps/plugin-os";
-// import { exists } from "@tauri-apps/plugin-fs";
-import {
-  getEmbeddedRustDesk,
-  getRustDeskInstallerPath,
-} from "./embedded-rustdesk";
-import { RUSTDESK_APP_PATH as MACOS_RUSTDESK_PATH } from "./os/macos";
-// import { RUSTDESK_PATH as WINDOWS_RUSTDESK_PATH } from "./os/windows";
-import { waitForRustDesk } from "./rustdesk";
+import { exists } from "@tauri-apps/plugin-fs";
 import { debugLog } from "./debugLog";
+import { sleep } from "./sleep";
+
+const PASSWORD = "FooBarBaz1";
+const CONFIG =
+  "=0nI9MWTLBXTuZjQ6FDUttmN1V3Q3U0QKhmSBBla2EWQ5gFUN50ZrV2byATaMti6ISeltmIsIiI6ISawFmIsISbvNmLk1WYk5WZnFWbus2clRGdzVnciojI5FGblJnIsISbvNmLk1WYk5WZnFWbus2clRGdzVnciojI0N3boJye";
+
+export async function installRustDeskMacOS(): Promise<void> {
+  const script = await resolveResource("resources/macos/install.sh");
+
+  await debugLog(`macOS installer: ${script}`);
+
+  const result = await Command.create("bash", [
+    script,
+    PASSWORD,
+    CONFIG,
+  ]).execute();
+
+  await debugLog(
+    `macOS installer exit=${result.code}\n` +
+      `stdout=${result.stdout}\n` +
+      `stderr=${result.stderr}`,
+  );
+
+  if (result.code !== 0) {
+    throw new Error(
+      result.stderr ||
+        result.stdout ||
+        `macOS RustDesk installer failed: ${result.code}`,
+    );
+  }
+}
+
+export async function installRustDeskWindows(): Promise<void> {
+  const script = await resolveResource("resources/windows/install.ps1");
+
+  await debugLog(`Windows installer: ${script}`);
+
+  const psCommand =
+    `Start-Process powershell.exe ` +
+    `-Verb RunAs ` +
+    `-Wait ` +
+    `-ArgumentList ` +
+    `'-NoProfile -ExecutionPolicy Bypass -File "${script}" -Password "${PASSWORD}" -Config "${CONFIG}"'`;
+
+  await debugLog(`PowerShell: ${psCommand}`);
+
+  const result = await Command.create("powershell", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    psCommand,
+  ]).execute();
+
+  await debugLog(
+    `Windows installer exit=${result.code}\n` +
+      `stdout=${result.stdout}\n` +
+      `stderr=${result.stderr}`,
+  );
+
+  if (result.code !== 0) {
+    throw new Error(
+      result.stderr ||
+        result.stdout ||
+        `Windows RustDesk installer failed: ${result.code}`,
+    );
+  }
+}
 
 export async function installRustDesk(): Promise<void> {
   const os = platform();
 
   if (os === "macos") {
-    const installer = await getEmbeddedRustDesk();
-
-    await installMacOS(installer);
+    await installRustDeskMacOS();
     return;
   }
 
   if (os === "windows") {
-    await installWindows();
-    await waitForRustDesk();
+    await installRustDeskWindows();
     return;
   }
 
   throw new Error(`Unsupported OS: ${os}`);
 }
 
-// ─────────────────────────────────────────────
-// macOS INSTALL
-// ─────────────────────────────────────────────
+const RUSTDESK_WINDOWS_PATH = "C:\\Program Files\\RustDesk\\RustDesk.exe";
 
-async function installMacOS(dmg: string): Promise<void> {
-  console.log("Installing RustDesk from:", dmg);
-
-  const mountResult = await Command.create("hdiutil", [
-    "attach",
-    dmg,
-    "-nobrowse",
-    "-plist",
-  ]).execute();
-
-  if (mountResult.code !== 0) {
-    throw new Error(mountResult.stderr || "Failed to mount RustDesk DMG");
-  }
-
-  const volumePath = extractMountPoint(mountResult.stdout);
-
-  if (!volumePath) {
-    throw new Error("Could not determine mounted DMG path");
-  }
-
-  console.log("Mounted:", volumePath);
-
-  try {
-    // Удаляем старую установку
-    await Command.create("rm", ["-rf", MACOS_RUSTDESK_PATH]).execute();
-
-    // Копируем новую
-    const copyResult = await Command.create("ditto", [
-      `${volumePath}/RustDesk.app`,
-      MACOS_RUSTDESK_PATH,
-    ]).execute();
-
-    if (copyResult.code !== 0) {
-      throw new Error(copyResult.stderr || "Failed to copy RustDesk.app");
-    }
-
-    console.log("RustDesk installed:", MACOS_RUSTDESK_PATH);
-  } finally {
-    const unmountResult = await Command.create("hdiutil", [
-      "detach",
-      volumePath,
-    ]).execute();
-
-    if (unmountResult.code !== 0) {
-      console.warn("Failed to unmount DMG:", unmountResult.stderr);
-    }
-  }
-}
-
-// ─────────────────────────────────────────────
-// WINDOWS INSTALL
-// ─────────────────────────────────────────────
-
-// async function installWindows(exe: string): Promise<void> {
-//   console.log("Installing RustDesk from:", exe);
-
-//   const command = Command.create("windows-installer", [
-//     "/C",
-//     `"${exe}" --silent-install`,
-//   ]);
-
-//   const result = await command.execute();
-
-//   console.log("Installer exit code:", result.code);
-//   console.log("Installer stdout:", result.stdout);
-//   console.log("Installer stderr:", result.stderr);
-
-//   if (result.code !== 0) {
-//     throw new Error(result.stderr || "RustDesk installation failed");
-//   }
-
-//   console.log("RustDesk installed");
-// }
-
-// async function installWindows(): Promise<void> {
-//   const exe = await getRustDeskInstallerPath();
-
-//   console.log("Installing RustDesk from:", exe);
-
-//   const command = Command.create("windows-installer", [
-//     "/C",
-//     `"${exe}" --silent-install`,
-//   ]);
-
-//   const result = await command.execute();
-
-//   console.log("Installer exit code:", result.code);
-//   console.log("stdout:", result.stdout);
-//   console.log("stderr:", result.stderr);
-
-//   if (result.code !== 0) {
-//     throw new Error(
-//       result.stderr || result.stdout || "RustDesk installation failed",
-//     );
-//   }
-
-//   console.log("RustDesk installed");
-// }
-
-async function installWindows(): Promise<void> {
-  const exe = await getRustDeskInstallerPath();
-
-  console.log("RustDesk path:", exe);
-
-  // if (!(await exists(exe))) {
-  //   throw new Error(`RustDesk executable not found: ${exe}`);
-  // }
-
-  const psCommand =
-    `Start-Process ` +
-    `-FilePath '${exe.replace(/'/g, "''")}' ` +
-    `-ArgumentList '--silent-install' ` +
-    `-Verb RunAs ` +
-    `-Wait`;
-
-  console.log("PowerShell command:", psCommand);
-
-  const command = Command.create("powershell", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    psCommand,
-  ]);
-
-  const result = await command.execute();
-
-  await debugLog("installWindows >>>");
-  await debugLog(`"exit:", ${result.code}`);
-  await debugLog(`"stdout:", ${result.stdout}`);
-  await debugLog(`"stderr:", ${result.stderr}`);
-
-  if (result.code !== 0) {
-    throw new Error(
-      result.stderr || result.stdout || "RustDesk installation failed",
-    );
-  }
-
-  console.log("RustDesk installed successfully");
-}
-
-// ─────────────────────────────────────────────
-// UNINSTALL
-// ─────────────────────────────────────────────
+const RUSTDESK_MACOS_PATH = "/Applications/RustDesk.app";
 
 export async function uninstallRustDesk(): Promise<void> {
   const os = platform();
 
-  if (os === "macos") {
-    await uninstallMacOS();
+  if (os === "windows") {
+    await uninstallRustDeskWindows();
     return;
   }
 
-  if (os === "windows") {
-    await uninstallWindows();
+  if (os === "macos") {
+    await uninstallRustDeskMacOS();
     return;
   }
 
@@ -194,89 +110,101 @@ export async function uninstallRustDesk(): Promise<void> {
 }
 
 // ─────────────────────────────────────────────
-// macOS UNINSTALL
+// Windows
 // ─────────────────────────────────────────────
 
-async function uninstallMacOS(): Promise<void> {
-  // RustDesk может быть запущен.
-  // Если процесса нет — игнорируем ошибку.
-
-  try {
-    await Command.create("killall", ["RustDesk"]).execute();
-  } catch {
-    // RustDesk не запущен
-  }
-
-  const result = await Command.create("rm", [
-    "-rf",
-    MACOS_RUSTDESK_PATH,
-  ]).execute();
-
-  if (result.code !== 0) {
-    throw new Error(result.stderr || "Failed to uninstall RustDesk on macOS");
-  }
-
-  console.log("RustDesk removed from macOS");
-}
-
-// ─────────────────────────────────────────────
-// WINDOWS UNINSTALL
-// ─────────────────────────────────────────────
-
-// async function uninstallWindows(): Promise<void> {
-//   const result = await Command.create("rustdesk-windows", [
-//     "--uninstall",
-//   ]).execute();
-
-//   if (result.code !== 0) {
-//     throw new Error(result.stderr || "Failed to uninstall RustDesk on Windows");
-//   }
-
-//   console.log("RustDesk removed from Windows");
-// }
-
-export async function uninstallWindows(): Promise<void> {
-  const rustDeskPath = "C:\\Program Files\\RustDesk\\RustDesk.exe";
+async function uninstallRustDeskWindows(): Promise<void> {
+  console.log("=== Windows RustDesk uninstall ===");
 
   const psCommand =
     `Start-Process ` +
-    `-FilePath '${rustDeskPath.replace(/'/g, "''")}' ` +
+    `-FilePath '${RUSTDESK_WINDOWS_PATH.replace(/'/g, "''")}' ` +
     `-ArgumentList '--uninstall' ` +
-    `-Verb RunAs ` +
-    `-Wait`;
+    `-Verb RunAs`;
 
   console.log("Uninstall command:", psCommand);
 
   const result = await Command.create("powershell", [
     "-NoProfile",
     "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
     "-Command",
     psCommand,
   ]).execute();
 
-  console.log("Uninstall exit:", result.code);
+  console.log("PowerShell exit:", result.code);
   console.log("stdout:", result.stdout);
   console.log("stderr:", result.stderr);
 
   if (result.code !== 0) {
     throw new Error(
-      result.stderr ||
-        result.stdout ||
-        "Failed to uninstall RustDesk on Windows",
+      result.stderr || result.stdout || "Failed to start RustDesk uninstall",
     );
   }
 
-  console.log("RustDesk removed from Windows");
+  // Ждём фактического удаления RustDesk.exe
+  for (let i = 0; i < 30; i++) {
+    const installed = await exists(RUSTDESK_WINDOWS_PATH);
+
+    if (!installed) {
+      console.log("RustDesk successfully removed");
+      return;
+    }
+
+    await sleep(1000);
+  }
+
+  throw new Error(
+    "RustDesk uninstall started, but RustDesk.exe is still present",
+  );
 }
 
 // ─────────────────────────────────────────────
-// HELPERS
+// macOS
 // ─────────────────────────────────────────────
 
-function extractMountPoint(output: string): string | null {
-  const match = output.match(
-    /<key>mount-point<\/key>\s*<string>(.*?)<\/string>/,
-  );
+async function uninstallRustDeskMacOS(): Promise<void> {
+  console.log("=== macOS RustDesk uninstall ===");
 
-  return match?.[1] ?? null;
+  // Останавливаем RustDesk.
+  // Если он не запущен — это нормально.
+  try {
+    const result = await Command.create("killall", ["RustDesk"]).execute();
+
+    console.log("killall exit:", result.code);
+  } catch {
+    console.log("RustDesk was not running");
+  }
+
+  await sleep(500);
+
+  const result = await Command.create("rm", [
+    "-rf",
+    RUSTDESK_MACOS_PATH,
+  ]).execute();
+
+  console.log("rm exit:", result.code);
+  console.log("stdout:", result.stdout);
+  console.log("stderr:", result.stderr);
+
+  if (result.code !== 0) {
+    throw new Error(result.stderr || "Failed to uninstall RustDesk on macOS");
+  }
+
+  // Проверяем, что приложение действительно удалено
+  for (let i = 0; i < 10; i++) {
+    const installed = await exists(RUSTDESK_MACOS_PATH);
+
+    if (!installed) {
+      console.log("RustDesk successfully removed");
+      return;
+    }
+
+    await sleep(500);
+  }
+
+  throw new Error(
+    "RustDesk uninstall finished, but RustDesk.app is still present",
+  );
 }

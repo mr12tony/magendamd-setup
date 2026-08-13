@@ -105,6 +105,11 @@
           "name": "taskkill",
           "cmd": "C:\\Windows\\System32\\taskkill.exe",
           "args": true
+        },
+        {
+          "name": "bash",
+          "cmd": "/bin/bash",
+          "args": true
         }
       ]
     }
