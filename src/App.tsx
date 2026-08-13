@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message, ask } from "@tauri-apps/plugin-dialog";
 import { platform } from "@tauri-apps/plugin-os";
+import { info, error } from "@tauri-apps/plugin-log";
 import {
   isRustDeskInstalled,
   getRustDeskId,
@@ -20,7 +21,6 @@ import {
 import { getAccessToken } from "./installer-token";
 import { getSystemInfo } from "./system";
 import { sleep } from "./sleep";
-import { debugLog } from "./debug-log";
 
 import "./App.css";
 
@@ -35,39 +35,37 @@ function App() {
     key: string;
     password: string;
   } | null>(null);
-  const [error, setError] = useState<any>(null);
 
   async function handleInstall() {
     if (!config || !token) return;
 
     try {
       setProcessing(true);
-      setError(null);
 
       const os = platform();
 
-      await debugLog("=== 1. Install RustDesk ===");
+      await info("=== 1. Install RustDesk ===");
 
       await installRustDesk();
 
-      await debugLog("=== 2. Wait after install ===");
+      await info("=== 2. Wait after install ===");
 
       await sleep(2000);
 
       if (os === "macos") {
-        await debugLog("=== macOS configuration ===");
+        await info("=== macOS configuration ===");
 
         await setRustDeskPasswordMacOS(config.password);
 
-        await debugLog("Password configured");
+        await info("Password configured");
 
         await configureRustDeskMacOS(config);
 
-        await debugLog("Config written");
+        await info("Config written");
 
         const ok = await verifyRustDeskMacOSConfig(config);
 
-        await debugLog("Config verification:", ok);
+        await info(`Config verification: ${ok}`);
 
         if (!ok) {
           throw new Error("RustDesk configuration verification failed");
@@ -75,17 +73,12 @@ function App() {
       }
 
       if (os === "windows") {
-        await debugLog("=== Windows configuration ===");
-
-        await setRustDeskPasswordWindows(config.password);
-
-        await debugLog("Password configured");
-
+        // await info("=== Windows configuration ===");
+        // await setRustDeskPasswordWindows(config.password);
+        // await info("Password configured");
         // Пока конфигурацию не включаем
         // await configureRustDeskWindows(config);
-
         // const ok = await verifyRustDeskWindowsConfig(config);
-
         // if (!ok) {
         //   throw new Error(
         //     "RustDesk configuration verification failed",
@@ -93,19 +86,19 @@ function App() {
         // }
       }
 
-      await debugLog("=== 3. Restart RustDesk ===");
+      await info("=== 3. Restart RustDesk ===");
 
       await restartRustDesk();
 
-      await debugLog("=== 4. Wait after restart ===");
+      await info("=== 4. Wait after restart ===");
 
       await sleep(3000);
 
-      await debugLog("=== 5. Get RustDesk ID ===");
+      await info("=== 5. Get RustDesk ID ===");
 
       const rustdeskId = await getRustDeskId();
 
-      await debugLog("=== 6. Register device ===");
+      await info("=== 6. Register device ===");
 
       const response = await fetch(
         `${import.meta.env.VITE_BACKEND_URL}/rustdesk/devices`,
@@ -129,7 +122,7 @@ function App() {
         );
       }
 
-      await debugLog("Device registered");
+      await info("Device registered");
 
       await message("RustDesk успешно установлен и настроен.", {
         title: "Установка завершена",
@@ -137,18 +130,17 @@ function App() {
       });
 
       await getCurrentWindow().close();
-    } catch (error) {
-      setError(error);
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Произошла ошибка во время установки RustDesk.";
 
-      await message(
-        error instanceof Error
-          ? error.message
-          : "Произошла ошибка во время установки RustDesk.",
-        {
-          title: "Ошибка установки",
-          kind: "error",
-        },
-      );
+      await error(msg);
+      await message(msg, {
+        title: "Ошибка установки",
+        kind: "error",
+      });
     } finally {
       setProcessing(false);
     }
@@ -173,39 +165,38 @@ function App() {
 
     try {
       setProcessing(true);
-      setError(null);
 
       const os = platform();
 
-      await debugLog("=== 1. Kill RustDesk ===");
+      await info("=== 1. Kill RustDesk ===");
       await killRustDesk();
 
-      await debugLog("=== 2. Uninstall RustDesk ===");
+      await info("=== 2. Uninstall RustDesk ===");
       await uninstallRustDesk();
 
-      await debugLog("=== 3. Wait after uninstall ===");
+      await info("=== 3. Wait after uninstall ===");
       await sleep(2000);
 
-      await debugLog("=== 4. Install RustDesk ===");
+      await info("=== 4. Install RustDesk ===");
       await installRustDesk();
 
-      await debugLog("=== 5. Wait after install ===");
+      await info("=== 5. Wait after install ===");
       await sleep(2000);
 
       if (os === "macos") {
-        await debugLog("=== macOS configuration ===");
+        await info("=== macOS configuration ===");
 
         await setRustDeskPasswordMacOS(config.password);
 
-        await debugLog("Password configured");
+        await info("Password configured");
 
         await configureRustDeskMacOS(config);
 
-        await debugLog("Config written");
+        await info("Config written");
 
         const ok = await verifyRustDeskMacOSConfig(config);
 
-        await debugLog("Config verification:", ok);
+        await info(`Config verification: ${ok}`);
 
         if (!ok) {
           throw new Error("RustDesk configuration verification failed");
@@ -213,17 +204,12 @@ function App() {
       }
 
       if (os === "windows") {
-        await debugLog("=== Windows configuration ===");
-
-        await setRustDeskPasswordWindows(config.password);
-
-        await debugLog("Password configured");
-
+        // await info("=== Windows configuration ===");
+        // await setRustDeskPasswordWindows(config.password);
+        // await info("Password configured");
         // Пока конфигурацию не включаем
         // await configureRustDeskWindows(config);
-
         // const ok = await verifyRustDeskWindowsConfig(config);
-
         // if (!ok) {
         //   throw new Error(
         //     "RustDesk configuration verification failed",
@@ -231,15 +217,15 @@ function App() {
         // }
       }
 
-      await debugLog("=== 6. Restart RustDesk ===");
+      await info("=== 6. Restart RustDesk ===");
 
       await restartRustDesk();
 
-      await debugLog("=== 7. Wait after restart ===");
+      await info("=== 7. Wait after restart ===");
 
       await sleep(3000);
 
-      await debugLog("=== 8. Get RustDesk ID ===");
+      await info("=== 8. Get RustDesk ID ===");
 
       const rustdeskId = await getRustDeskId();
 
@@ -252,18 +238,17 @@ function App() {
       );
 
       await getCurrentWindow().close();
-    } catch (error) {
-      setError(error);
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Не удалось переустановить RustDesk.";
 
-      await message(
-        error instanceof Error
-          ? error.message
-          : "Не удалось переустановить RustDesk.",
-        {
-          title: "Ошибка переустановки",
-          kind: "error",
-        },
-      );
+      await error(msg);
+      await message(msg, {
+        title: "Ошибка переустановки",
+        kind: "error",
+      });
     } finally {
       setProcessing(false);
     }
@@ -293,7 +278,10 @@ function App() {
 
     getAccessToken()
       .then((token) => setToken(token))
-      .catch((err) => setToken(err));
+      .catch((err) => {
+        setToken("");
+        error(err);
+      });
   }, []);
 
   async function initialize() {
@@ -301,11 +289,15 @@ function App() {
       const config = await getRustDeskConfig();
 
       setConfig(config);
-      setError(null);
-    } catch (error) {
+    } catch (err) {
       setConfig(null);
-      setError(error);
 
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Не удалось переустановить RustDesk.";
+
+      await error(msg);
       await message(
         "Не удалось подключиться к серверу.\n\nПроверьте подключение к интернету и попробуйте снова.",
         {
@@ -331,8 +323,10 @@ function App() {
         title: "RustDesk",
         kind: "warning",
       });
-    } catch (error) {
-      setError(error);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+
+      await error(msg);
     }
   }
 
@@ -439,7 +433,7 @@ function App() {
           )}
         </div>
 
-        <pre>{JSON.stringify({ config, token, error }, null, 2)}</pre>
+        <pre>{JSON.stringify({ config, token }, null, 2)}</pre>
       </form>
     </div>
   );

@@ -13,6 +13,7 @@
     "os:default",
     "os:allow-hostname",
     "fs:default",
+    "log:default",
     {
       "identifier": "fs:allow-exists",
       "allow": [

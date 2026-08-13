@@ -1,29 +1,3 @@
-use std::fs::OpenOptions;
-use std::io::Write;
-
-#[tauri::command]
-fn write_debug_log(message: String) -> Result<(), String> {
-    let exe_path = std::env::current_exe()
-        .map_err(|e| e.to_string())?;
-
-    let exe_dir = exe_path
-        .parent()
-        .ok_or("Failed to get executable directory")?;
-
-    let log_path = exe_dir.join("debug.log");
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| e.to_string())?;
-
-    writeln!(file, "{}", message)
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
 #[tauri::command]
 fn get_current_exe() -> Result<String, String> {
     std::env::current_exe()
@@ -33,8 +7,8 @@ fn get_current_exe() -> Result<String, String> {
 
 #[tauri::command]
 fn get_access_token() -> Result<String, String> {
-    let exe_path = std::env::current_exe()
-        .map_err(|e| format!("Failed to get executable path: {e}"))?;
+    let exe_path =
+        std::env::current_exe().map_err(|e| format!("Failed to get executable path: {e}"))?;
 
     let exe_dir = exe_path
         .parent()
@@ -75,6 +49,18 @@ fn get_access_token() -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(tauri_plugin_log::log::LevelFilter::Info)
+                .target(
+                    tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::LogDir {
+                            file_name: Some("logs".to_string()),
+                        },
+                    ),
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -84,7 +70,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_current_exe,
             get_access_token,
-            write_debug_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
