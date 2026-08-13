@@ -15,31 +15,83 @@ export async function getRustDeskId(): Promise<string | null> {
     return null;
   }
 
-  const command = getRustDeskCommand();
-
-  const result = await Command.create(command, ["--get-id"]).execute();
-
-  if (result.code !== 0) {
-    console.error(result.stderr);
-    return null;
-  }
-
-  return result.stdout.trim();
-}
-
-export function getRustDeskCommand() {
   const os = platform();
 
   if (os === "macos") {
-    return "rustdesk-macos";
+    const result = await Command.create("rustdesk-macos", [
+      "--get-id",
+    ]).execute();
+
+    if (result.code !== 0) {
+      console.error(result.stderr);
+      return null;
+    }
+
+    return result.stdout.trim() || null;
   }
 
   if (os === "windows") {
-    return "rustdesk-windows";
+    const escapedPath = path.replace(/'/g, "''");
+
+    const psCommand = `& '${escapedPath}' --get-id | Out-String`;
+
+    console.log("Get RustDesk ID:", psCommand);
+
+    const result = await Command.create("powershell", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      psCommand,
+    ]).execute();
+
+    console.log("RustDesk get-id exit:", result.code);
+    console.log("stdout:", result.stdout);
+    console.log("stderr:", result.stderr);
+
+    if (result.code !== 0) {
+      return null;
+    }
+
+    const id = result.stdout.trim();
+
+    return id || null;
   }
 
   throw new Error(`Unsupported OS: ${os}`);
 }
+
+// export async function getRustDeskId(): Promise<string | null> {
+//   const path = await getRustDeskPath();
+
+//   if (!path) {
+//     return null;
+//   }
+
+//   const command = getRustDeskCommand();
+
+//   const result = await Command.create(command, ["--get-id"]).execute();
+
+//   if (result.code !== 0) {
+//     console.error(result.stderr);
+//     return null;
+//   }
+
+//   return result.stdout.trim();
+// }
+
+// export function getRustDeskCommand() {
+//   const os = platform();
+
+//   if (os === "macos") {
+//     return "rustdesk-macos";
+//   }
+
+//   if (os === "windows") {
+//     return "rustdesk-windows";
+//   }
+
+//   throw new Error(`Unsupported OS: ${os}`);
+// }
 
 export async function getRustDeskConfig(): Promise<{
   rendezvousServer: string;
@@ -69,14 +121,55 @@ export async function getRustDeskConfig(): Promise<{
 }
 
 export async function openRustDesk(): Promise<void> {
-  const command = getRustDeskCommand();
+  const os = platform();
 
-  const result = await Command.create(command).execute();
+  if (os === "macos") {
+    const result = await Command.create("rustdesk-macos").execute();
 
-  if (result.code !== 0) {
-    throw new Error(result.stderr || "Failed to open RustDesk");
+    if (result.code !== 0) {
+      throw new Error(result.stderr || "Failed to open RustDesk");
+    }
+
+    return;
   }
+
+  if (os === "windows") {
+    const path = await getRustDeskPath();
+
+    if (!path) {
+      throw new Error("RustDesk is not installed");
+    }
+
+    const psCommand = `Start-Process -FilePath '${path.replace(/'/g, "''")}'`;
+
+    const result = await Command.create("powershell", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      psCommand,
+    ]).execute();
+
+    if (result.code !== 0) {
+      throw new Error(
+        result.stderr || result.stdout || "Failed to open RustDesk",
+      );
+    }
+
+    return;
+  }
+
+  throw new Error(`Unsupported OS: ${os}`);
 }
+
+// export async function openRustDesk(): Promise<void> {
+//   const command = getRustDeskCommand();
+
+//   const result = await Command.create(command).execute();
+
+//   if (result.code !== 0) {
+//     throw new Error(result.stderr || "Failed to open RustDesk");
+//   }
+// }
 
 const RUSTDESK_APP_PATH = "/Applications/RustDesk.app";
 
