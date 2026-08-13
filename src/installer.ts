@@ -1,7 +1,6 @@
 import { Command } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
 // import { exists } from "@tauri-apps/plugin-fs";
-import { info, error } from "@tauri-apps/plugin-log";
 import {
   getEmbeddedRustDesk,
   getRustDeskInstallerPath,
@@ -9,6 +8,7 @@ import {
 import { RUSTDESK_APP_PATH as MACOS_RUSTDESK_PATH } from "./os/macos";
 // import { RUSTDESK_PATH as WINDOWS_RUSTDESK_PATH } from "./os/windows";
 import { waitForRustDesk } from "./rustdesk";
+import { debugLog } from "./debugLog";
 
 export async function installRustDesk(): Promise<void> {
   const os = platform();
@@ -159,9 +159,10 @@ async function installWindows(): Promise<void> {
 
   const result = await command.execute();
 
-  await info(`"exit:", ${result.code}`);
-  await info(`"stdout:", ${result.stdout}`);
-  await error(`"stderr:", ${result.stderr}`);
+  await debugLog("installWindows >>>");
+  await debugLog(`"exit:", ${result.code}`);
+  await debugLog(`"stdout:", ${result.stdout}`);
+  await debugLog(`"stderr:", ${result.stderr}`);
 
   if (result.code !== 0) {
     throw new Error(

@@ -1,3 +1,51 @@
+use std::fs::OpenOptions;
+use std::io::Write;
+
+fn debug_log(message: impl AsRef<str>) {
+    let Ok(exe_path) = std::env::current_exe() else {
+        return;
+    };
+
+    let Some(exe_dir) = exe_path.parent() else {
+        return;
+    };
+
+    #[cfg(target_os = "macos")]
+    let log_dir = exe_dir
+        .parent() // Contents
+        .and_then(|p| p.parent()) // Magendamd.app
+        .and_then(|p| p.parent()); // parent of .app
+
+    #[cfg(target_os = "windows")]
+    let log_dir = Some(exe_dir);
+
+    let Some(log_dir) = log_dir else {
+        return;
+    };
+
+    let log_path = log_dir.join("debug.log");
+
+    let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    else {
+        return;
+    };
+
+    let _ = writeln!(
+        file,
+        "{}",
+        message.as_ref()
+    );
+}
+
+#[tauri::command]
+fn debug_log_command(message: String) -> Result<(), String> {
+    debug_log(message);
+    Ok(())
+}
+
 #[tauri::command]
 fn get_current_exe() -> Result<String, String> {
     std::env::current_exe()
@@ -49,18 +97,18 @@ fn get_access_token() -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .level(tauri_plugin_log::log::LevelFilter::Info)
-                .target(
-                    tauri_plugin_log::Target::new(
-                        tauri_plugin_log::TargetKind::LogDir {
-                            file_name: Some("logs".to_string()),
-                        },
-                    ),
-                )
-                .build(),
-        )
+        // .plugin(
+        //     tauri_plugin_log::Builder::new()
+        //         .level(tauri_plugin_log::log::LevelFilter::Info)
+        //         .target(
+        //             tauri_plugin_log::Target::new(
+        //                 tauri_plugin_log::TargetKind::LogDir {
+        //                     file_name: Some("logs".to_string()),
+        //                 },
+        //             ),
+        //         )
+        //         .build(),
+        // )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -70,6 +118,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_current_exe,
             get_access_token,
+            debug_log_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
