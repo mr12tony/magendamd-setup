@@ -22,7 +22,10 @@ $RustDeskExe = Join-Path $RustDeskDir "RustDesk.exe"
 # ============================================================
 
 $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$principal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
+
+$principal = New-Object Security.Principal.WindowsPrincipal(
+    $currentIdentity
+)
 
 $isAdmin = $principal.IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator
@@ -44,13 +47,21 @@ if (-not $isAdmin) {
         "`"$Config`""
     )
 
-    Start-Process `
+    $elevatedProcess = Start-Process `
         -FilePath "powershell.exe" `
         -Verb RunAs `
-        -ArgumentList ($arguments -join " ")
+        -ArgumentList ($arguments -join " ") `
+        -Wait `
+        -PassThru
+
+    if ($elevatedProcess.ExitCode -ne 0) {
+        throw "Elevated installation failed with exit code $($elevatedProcess.ExitCode)"
+    }
 
     exit 0
 }
+
+Write-Host "Running as administrator"
 
 # ============================================================
 # Architecture
@@ -84,10 +95,13 @@ if (-not (Test-Path $Installer)) {
 # Stop existing RustDesk
 # ============================================================
 
-Write-Host "Stopping RustDesk..."
+Write-Host "Stopping existing RustDesk..."
 
-Get-Process "RustDesk" -ErrorAction SilentlyContinue |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process "RustDesk" `
+    -ErrorAction SilentlyContinue |
+    Stop-Process `
+        -Force `
+        -ErrorAction SilentlyContinue
 
 $service = Get-Service `
     -Name "RustDesk" `
@@ -96,6 +110,9 @@ $service = Get-Service `
 if ($null -ne $service) {
 
     if ($service.Status -ne "Stopped") {
+
+        Write-Host "Stopping RustDesk service..."
+
         Stop-Service `
             -Name "RustDesk" `
             -Force `
@@ -106,34 +123,37 @@ if ($null -ne $service) {
 Start-Sleep -Seconds 2
 
 # ============================================================
-# Install
+# Install RustDesk
 # ============================================================
 
 Write-Host "Installing RustDesk..."
 
+# ВАЖНО:
+# Здесь специально НЕТ -Wait.
+# RustDesk installer может не завершить процесс так,
+# как ожидает Start-Process -Wait.
+#
+# Вместо этого ниже ждём фактического появления RustDesk.exe.
+
 $installProcess = Start-Process `
     -FilePath $Installer `
     -ArgumentList "--silent-install" `
-    -Wait `
     -PassThru
 
-Write-Host "Installer exit code: $($installProcess.ExitCode)"
-
-if ($installProcess.ExitCode -ne 0) {
-    throw "RustDesk installation failed with exit code $($installProcess.ExitCode)"
-}
+Write-Host "RustDesk installer started. PID: $($installProcess.Id)"
 
 # ============================================================
 # Wait for RustDesk.exe
 # ============================================================
 
-Write-Host "Waiting for RustDesk..."
+Write-Host "Waiting for RustDesk.exe..."
 
 $found = $false
 
-for ($i = 0; $i -lt 30; $i++) {
+for ($i = 0; $i -lt 60; $i++) {
 
     if (Test-Path $RustDeskExe) {
+
         $found = $true
         break
     }
@@ -142,8 +162,20 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 
 if (-not $found) {
-    throw "RustDesk.exe was not found after installation"
+
+    if (-not $installProcess.HasExited) {
+
+        Stop-Process `
+            -Id $installProcess.Id `
+            -Force `
+            -ErrorAction SilentlyContinue
+    }
+
+    throw "RustDesk.exe was not found after 60 seconds"
 }
+
+Write-Host "RustDesk.exe found:"
+Write-Host $RustDeskExe
 
 # ============================================================
 # Service
@@ -157,6 +189,7 @@ $service = Get-Service `
 
 if ($null -eq $service) {
 
+    Write-Host "RustDesk service not found."
     Write-Host "Installing RustDesk service..."
 
     $serviceProcess = Start-Process `
@@ -164,6 +197,8 @@ if ($null -eq $service) {
         -ArgumentList "--install-service" `
         -Wait `
         -PassThru
+
+    Write-Host "Service installer exit code: $($serviceProcess.ExitCode)"
 
     if ($serviceProcess.ExitCode -ne 0) {
         throw "Failed to install RustDesk service"
@@ -186,14 +221,37 @@ if ($null -eq $service) {
 
 Write-Host "Starting RustDesk service..."
 
-Start-Service `
-    -Name "RustDesk" `
-    -ErrorAction SilentlyContinue
+if ($service.Status -ne "Running") {
 
-Start-Sleep -Seconds 3
+    Start-Service `
+        -Name "RustDesk"
+}
+
+# Wait until service is running
+
+for ($i = 0; $i -lt 30; $i++) {
+
+    $service.Refresh()
+
+    if ($service.Status -eq "Running") {
+        break
+    }
+
+    Start-Sleep -Seconds 1
+}
+
+$service.Refresh()
+
+if ($service.Status -ne "Running") {
+    throw "RustDesk service failed to start"
+}
+
+Write-Host "RustDesk service is running"
+
+Start-Sleep -Seconds 2
 
 # ============================================================
-# Config
+# Apply Config
 # ============================================================
 
 Write-Host "Applying RustDesk config..."
@@ -214,8 +272,10 @@ if ($configProcess.ExitCode -ne 0) {
     throw "Failed to apply RustDesk config"
 }
 
+Write-Host "RustDesk config applied"
+
 # ============================================================
-# Password
+# Set Password
 # ============================================================
 
 Write-Host "Setting RustDesk password..."
@@ -236,35 +296,10 @@ if ($passwordProcess.ExitCode -ne 0) {
     throw "Failed to set RustDesk password"
 }
 
-# ============================================================
-# Get ID
-# ============================================================
-
-Write-Host "Getting RustDesk ID..."
-
-$idProcess = Start-Process `
-    -FilePath $RustDeskExe `
-    -ArgumentList "--get-id" `
-    -Wait `
-    -PassThru `
-    -RedirectStandardOutput "$env:TEMP\rustdesk-id.txt" `
-    -NoNewWindow
-
-$RustDeskId = (
-    Get-Content "$env:TEMP\rustdesk-id.txt" -Raw
-).Trim()
-
-Remove-Item `
-    "$env:TEMP\rustdesk-id.txt" `
-    -Force `
-    -ErrorAction SilentlyContinue
-
-if ([string]::IsNullOrWhiteSpace($RustDeskId)) {
-    throw "Failed to get RustDesk ID"
-}
+Write-Host "RustDesk password configured"
 
 # ============================================================
-# Restart service
+# Restart Service
 # ============================================================
 
 Write-Host "Restarting RustDesk service..."
@@ -273,7 +308,71 @@ Restart-Service `
     -Name "RustDesk" `
     -Force
 
+# Wait for Running
+
+$service = Get-Service `
+    -Name "RustDesk"
+
+for ($i = 0; $i -lt 30; $i++) {
+
+    $service.Refresh()
+
+    if ($service.Status -eq "Running") {
+        break
+    }
+
+    Start-Sleep -Seconds 1
+}
+
+$service.Refresh()
+
+if ($service.Status -ne "Running") {
+    throw "RustDesk service failed to restart"
+}
+
+Write-Host "RustDesk service restarted successfully"
+
 Start-Sleep -Seconds 3
+
+# ============================================================
+# Get ID AFTER restart
+# ============================================================
+
+Write-Host "Getting RustDesk ID..."
+
+$idFile = Join-Path $env:TEMP "rustdesk-id-$PID.txt"
+
+Remove-Item `
+    $idFile `
+    -Force `
+    -ErrorAction SilentlyContinue
+
+$idProcess = Start-Process `
+    -FilePath $RustDeskExe `
+    -ArgumentList "--get-id" `
+    -Wait `
+    -PassThru `
+    -RedirectStandardOutput $idFile `
+    -NoNewWindow
+
+if ($idProcess.ExitCode -ne 0) {
+    throw "RustDesk --get-id failed with exit code $($idProcess.ExitCode)"
+}
+
+$RustDeskId = (
+    Get-Content `
+        $idFile `
+        -Raw
+).Trim()
+
+Remove-Item `
+    $idFile `
+    -Force `
+    -ErrorAction SilentlyContinue
+
+if ([string]::IsNullOrWhiteSpace($RustDeskId)) {
+    throw "Failed to get RustDesk ID"
+}
 
 # ============================================================
 # Result
