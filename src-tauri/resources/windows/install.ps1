@@ -1,15 +1,21 @@
-# 1. Приём параметров из Tauri ($args[0] = password, $args[1] = config)
+# 1. Объявление параметров
 param(
     [string]$rustdesk_pw = $args[0],
     [string]$rustdesk_cfg = $args[1]
 )
 
-# Определяем директорию скрипта и путь к лог-файлу
+# Вычисляем директорию скрипта независимо от способа вызова
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
-if (-not $SCRIPT_DIR) { $SCRIPT_DIR = Get-Location }
+if (-not $SCRIPT_DIR) { 
+    $SCRIPT_DIR = $PSScriptRoot 
+}
+if (-not $SCRIPT_DIR) { 
+    $SCRIPT_DIR = Get-Location 
+}
+
 $LOG_FILE = Join-Path -Path $SCRIPT_DIR -ChildPath "install_rustdesk.log"
 
-# Функция для логирования в консоль и файл
+# Функция логирования
 function Write-Log {
     param([string]$Message)
     $TimeStamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -20,7 +26,7 @@ function Write-Log {
 
 Write-Log "=== Запуск процесса установки RustDesk (Windows) ==="
 
-# Проверка наличия аргументов
+# Проверка параметров
 if ([string]::IsNullOrWhitespace($rustdesk_pw) -or [string]::IsNullOrWhitespace($rustdesk_cfg)) {
     Write-Log "Ошибка: Не переданы необходимые аргументы (пароль и/или конфиг)."
     exit 1
@@ -32,12 +38,19 @@ $isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsI
 if (-not $isElevated) {
     Write-Log "Запрос прав администратора (UAC)..."
     try {
-        # Перезапуск скрипта с флагом RunAs
-        $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" `"$rustdesk_pw`" `"$rustdesk_cfg`""
-        Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait
-        exit 0
+        # Экранируем двойные кавычки для безопасной передачи параметров через командную строку
+        $escPw = $rustdesk_pw.Replace('"', '\"')
+        $escCfg = $rustdesk_cfg.Replace('"', '\"')
+        
+        $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" `"$escPw`" `"$escCfg`""
+        
+        # Запускаем от имени админа, ждём завершения и пробрасываем ExitCode обратно в Tauri
+        $process = Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait -PassThru
+        
+        Write-Log "Процесс установки завершен с кодом: $($process.ExitCode)"
+        exit $process.ExitCode
     } catch {
-        Write-Log "Ошибка: Пользователь отклонил запрос прав администратора."
+        Write-Log "Ошибка: Пользователь отклонил запрос UAC или произошел сбой."
         exit 1
     }
 }
@@ -47,10 +60,11 @@ if (-not $isElevated) {
 Write-Log "Права администратора получены."
 
 # 3. Поиск EXE файла установки рядом со скриптом
-$installerFile = Get-ChildItem -Path $SCRIPT_DIR -Filter "*.exe" | Where-Object { $_.Name -like "*rustdesk*" -or $_.Name -like "*setup*" -or $_.Name -like "*x86_64*" } | Select-Object -First 1
+$installerFile = Get-ChildItem -Path $SCRIPT_DIR -Filter "*.exe" | Where-Object { 
+    $_.Name -like "*rustdesk*" -or $_.Name -like "*setup*" -or $_.Name -like "*x86_64*" 
+} | Select-Object -First 1
 
 if (-not $installerFile) {
-    # Если не нашли по маске, берем любой .exe файл в этой папке (кроме текущего процесса, если скомпилирован)
     $installerFile = Get-ChildItem -Path $SCRIPT_DIR -Filter "*.exe" | Select-Object -First 1
 }
 
@@ -92,7 +106,6 @@ if ($service -and $service.Status -ne 'Running') {
 $installedExe = "$env:ProgramFiles\RustDesk\rustdesk.exe"
 
 if (-not (Test-Path $installedExe)) {
-    # Альтернативный путь (Program Files x86)
     $installedExe = "${env:ProgramFiles(x86)}\RustDesk\rustdesk.exe"
 }
 
@@ -107,8 +120,9 @@ if (Test-Path $installedExe) {
     Write-Log "Запрос RustDesk ID..."
     $rustdesk_id = & $installedExe --get-id 2>$null
     
-    # Удаляем лишние пробелы/переносы
-    if ($rustdesk_id) { $rustdesk_id = $rustdesk_id.Trim() }
+    if ($rustdesk_id) { 
+        $rustdesk_id = $rustdesk_id.Trim() 
+    }
 
     Write-Log "-----------------------------------------------"
     if ($rustdesk_id) {
@@ -122,10 +136,11 @@ if (Test-Path $installedExe) {
     # Запускаем GUI приложения
     Write-Log "Запуск RustDesk GUI..."
     Start-Process -FilePath $installedExe
+    
+    Write-Log "=== Установка успешно завершена ==="
+    exit 0
 
 } else {
     Write-Log "Ошибка: Исполняемый файл RustDesk не найден после установки."
     exit 1
 }
-
-Write-Log "=== Установка успешно завершена ==="
