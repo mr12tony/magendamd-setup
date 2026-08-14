@@ -5,19 +5,20 @@ import { exists } from "@tauri-apps/plugin-fs";
 import { debugLog } from "./debugLog";
 import { sleep } from "./sleep";
 
-const PASSWORD = "FooBarBaz1";
-const CONFIG =
-  "=0nI9MWTLBXTuZjQ6FDUttmN1V3Q3U0QKhmSBBla2EWQ5gFUN50ZrV2byATaMti6ISeltmIsIiI6ISawFmIsISbvNmLk1WYk5WZnFWbus2clRGdzVnciojI5FGblJnIsISbvNmLk1WYk5WZnFWbus2clRGdzVnciojI0N3boJye";
+type AppConfig = {
+  config: string;
+  password: string;
+};
 
-export async function installRustDeskMacOS(): Promise<void> {
+export async function installRustDeskMacOS(config: AppConfig): Promise<void> {
   const script = await resolveResource("resources/macos/install.sh");
 
   await debugLog(`macOS installer: ${script}`);
 
   const result = await Command.create("bash", [
     script,
-    PASSWORD,
-    CONFIG,
+    config.password,
+    config.config,
   ]).execute();
 
   await debugLog(
@@ -35,27 +36,37 @@ export async function installRustDeskMacOS(): Promise<void> {
   }
 }
 
-export async function installRustDeskWindows(): Promise<void> {
+export async function installRustDeskWindows(config: AppConfig): Promise<void> {
   const script = await resolveResource("resources/windows/install.ps1");
 
   await debugLog(`Windows installer: ${script}`);
 
-  const psCommand =
-    `Start-Process powershell.exe ` +
-    `-Verb RunAs ` +
-    `-Wait ` +
-    `-ArgumentList ` +
-    `'-NoProfile -ExecutionPolicy Bypass -File "${script}" -Password "${PASSWORD}" -Config "${CONFIG}"'`;
+  // const psCommand =
+  //   `Start-Process powershell.exe ` +
+  //   `-Verb RunAs ` +
+  //   `-Wait ` +
+  //   `-ArgumentList ` +
+  //   `'-NoProfile -ExecutionPolicy Bypass -File "${script}" -Password "${config.password}" -Config "${config.config}"'`;
 
-  await debugLog(`PowerShell: ${psCommand}`);
+  // await debugLog(`PowerShell: ${psCommand}`);
+
+  // const result = await Command.create("powershell", [
+  //   "-NoProfile",
+  //   "-NonInteractive",
+  //   "-ExecutionPolicy",
+  //   "Bypass",
+  //   "-Command",
+  //   psCommand,
+  // ]).execute();
 
   const result = await Command.create("powershell", [
     "-NoProfile",
-    "-NonInteractive",
     "-ExecutionPolicy",
     "Bypass",
-    "-Command",
-    psCommand,
+    "-File",
+    script,
+    config.password,
+    config.config,
   ]).execute();
 
   await debugLog(
@@ -73,16 +84,16 @@ export async function installRustDeskWindows(): Promise<void> {
   }
 }
 
-export async function installRustDesk(): Promise<void> {
+export async function installRustDesk(config: AppConfig): Promise<void> {
   const os = platform();
 
   if (os === "macos") {
-    await installRustDeskMacOS();
+    await installRustDeskMacOS(config);
     return;
   }
 
   if (os === "windows") {
-    await installRustDeskWindows();
+    await installRustDeskWindows(config);
     return;
   }
 

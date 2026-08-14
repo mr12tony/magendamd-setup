@@ -53,6 +53,71 @@ fn get_current_exe() -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AppConfig {
+    token: String,
+    password: String,
+    config: String,
+}
+
+#[tauri::command]
+fn get_config() -> Result<AppConfig, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {e}"))?;
+
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "Failed to get executable directory".to_string())?;
+
+    #[cfg(target_os = "macos")]
+    let config_dir = exe_dir
+        .parent() // Contents
+        .and_then(|p| p.parent()) // .app
+        .and_then(|p| p.parent()) // directory next to .app
+        .ok_or_else(|| "Failed to determine config directory".to_string())?;
+
+    #[cfg(target_os = "windows")]
+    let config_dir = exe_dir;
+
+    let config_path = config_dir.join("config.json");
+
+    println!("Config path: {}", config_path.display());
+
+    let content = std::fs::read_to_string(&config_path)
+        .map_err(|e| {
+            format!(
+                "Failed to read config.json at {}: {}",
+                config_path.display(),
+                e
+            )
+        })?;
+
+    let config: AppConfig = serde_json::from_str(&content)
+        .map_err(|e| {
+            format!(
+                "Failed to parse config.json at {}: {}",
+                config_path.display(),
+                e
+            )
+        })?;
+
+    if config.token.trim().is_empty() {
+        return Err("config.json: token is empty".to_string());
+    }
+
+    if config.password.trim().is_empty() {
+        return Err("config.json: password is empty".to_string());
+    }
+
+    if config.config.trim().is_empty() {
+        return Err("config.json: config is empty".to_string());
+    }
+
+    Ok(config)
+}
+
 #[tauri::command]
 fn get_access_token() -> Result<String, String> {
     let exe_path =
@@ -118,6 +183,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_current_exe,
             get_access_token,
+            get_config,
             debug_log_command,
         ])
         .run(tauri::generate_context!())

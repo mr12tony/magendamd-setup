@@ -1,12 +1,8 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
-import {
-  isRustDeskInstalled,
-  getRustDeskConfig,
-  getRustDeskId,
-} from "./rustdesk";
-import { getAccessToken } from "./installer-token";
+import { isRustDeskInstalled, getRustDeskId } from "./rustdesk";
+import { getAppConfig } from "./get-app-config";
 import { getSystemInfo } from "./system";
 import { debugLog } from "./debugLog";
 import { sleep } from "./sleep";
@@ -16,25 +12,26 @@ import "./App.css";
 
 function App() {
   const [hostname, setHostname] = useState("");
-  const [token, setToken] = useState("");
   const [processing, setProcessing] = useState(false);
   const [installed, setInstalled] = useState(false);
   const [config, setConfig] = useState<{
-    rendezvousServer: string;
-    relayServer: string;
-    key: string;
+    token: string;
     password: string;
+    config: string;
   } | null>(null);
 
   async function handleInstall() {
-    if (!config || !token) return;
+    if (!config) return;
 
     try {
       setProcessing(true);
 
       await debugLog("=== RustDesk installation started ===");
 
-      await installRustDesk();
+      await installRustDesk({
+        config: config.config,
+        password: config.password,
+      });
 
       await debugLog("=== RustDesk installer finished ===");
 
@@ -54,7 +51,7 @@ function App() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-RustDesk-Key": token,
+            "X-RustDesk-Key": config.token,
           },
           body: JSON.stringify({
             device_id: rustdeskId,
@@ -105,18 +102,11 @@ function App() {
     })();
 
     initialize();
-
-    getAccessToken()
-      .then((token) => setToken(token))
-      .catch((err) => {
-        setToken("");
-        debugLog(err);
-      });
   }, []);
 
   async function initialize() {
     try {
-      const config = await getRustDeskConfig();
+      const config = await getAppConfig();
 
       setConfig(config);
     } catch (err) {
@@ -125,16 +115,13 @@ function App() {
       const msg =
         err instanceof Error
           ? err.message
-          : "Не удалось переустановить RustDesk.";
+          : "Не удалось получить конфигурацию RustDesk.";
 
       await debugLog(msg);
-      await message(
-        "Не удалось подключиться к серверу.\n\nПроверьте подключение к интернету и попробуйте снова.",
-        {
-          title: "Нет подключения",
-          kind: "error",
-        },
-      );
+      await message(msg, {
+        title: "Ошибка конфигурации",
+        kind: "error",
+      });
 
       return;
     }
@@ -263,7 +250,9 @@ function App() {
           )}
         </div>
 
-        <pre>{JSON.stringify({ config, token }, null, 2)}</pre>
+        {/* <pre className="max-w-[400px] overflow-auto">
+          {JSON.stringify({ config }, null, 2)}
+        </pre> */}
       </form>
     </div>
   );
