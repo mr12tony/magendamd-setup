@@ -1,13 +1,16 @@
-# 1. Объявление параметров
+# 1. Объявление параметров (без $args!)
 param(
-    [string]$rustdesk_pw = $args[0],
-    [string]$rustdesk_cfg = $args[1]
+    [Parameter(Position=0)]
+    [string]$rustdesk_pw,
+
+    [Parameter(Position=1)]
+    [string]$rustdesk_cfg
 )
 
-# Вычисляем директорию скрипта независимо от способа вызова
-$SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition
+# Вычисляем директорию скрипта
+$SCRIPT_DIR = $PSScriptRoot
 if (-not $SCRIPT_DIR) { 
-    $SCRIPT_DIR = $PSScriptRoot 
+    $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Definition 
 }
 if (-not $SCRIPT_DIR) { 
     $SCRIPT_DIR = Get-Location 
@@ -38,13 +41,16 @@ $isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsI
 if (-not $isElevated) {
     Write-Log "Запрос прав администратора (UAC)..."
     try {
-        # Экранируем двойные кавычки для безопасной передачи параметров через командную строку
+        # Экранируем кавычки для безопасности
         $escPw = $rustdesk_pw.Replace('"', '\"')
         $escCfg = $rustdesk_cfg.Replace('"', '\"')
         
-        $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" `"$escPw`" `"$escCfg`""
+        $scriptPath = $MyInvocation.MyCommand.Path
+        if (-not $scriptPath) { $scriptPath = $PSCommandPath }
+
+        $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" `"$escPw`" `"$escCfg`""
         
-        # Запускаем от имени админа, ждём завершения и пробрасываем ExitCode обратно в Tauri
+        # Запускаем от имени админа и ждём завершения
         $process = Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait -PassThru
         
         Write-Log "Процесс установки завершен с кодом: $($process.ExitCode)"
