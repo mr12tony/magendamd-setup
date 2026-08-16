@@ -477,7 +477,7 @@ if [ "$SERVICE_FOUND" = "YES" ]; then
     log "[SERVER] System service is installed."
     log "[SERVER] Using installed RustDesk system service."
 
-    # Даём launchd время запустить service.
+    # Give launchd time to start the service.
     sleep 2
 
 else
@@ -695,7 +695,7 @@ ROOT_SCRIPT
 
     APPLESCRIPT_COMMAND="/bin/bash $TEMP_SCRIPT"
 
-    PROMPT="Для установки и настройки RustDesk требуются права администратора."
+    PROMPT="Administrator privileges are required to install and configure RustDesk."
 
     log "[ADMIN] Launching privileged installer through macOS authorization dialog..."
 
