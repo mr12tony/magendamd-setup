@@ -1,8 +1,9 @@
 fn main() {
-    if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
-        let mut res = embed_resource::ResourceBuilder::new();
-        // Указываем манифест, требующий права администратора
-        res.set_manifest(r#"
+    let mut attributes = tauri_build::Attributes::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        let windows_attrs = tauri_build::WindowsAttributes::new().app_manifest(r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
@@ -13,7 +14,9 @@ fn main() {
   </trustInfo>
 </assembly>
 "#);
-        res.compile().unwrap();
+        attributes = attributes.windows_attributes(windows_attrs);
     }
-    tauri_build::build()
+
+    // Запускаем сборку с нашими параметрами
+    tauri_build::try_build(attributes).expect("failed to run tauri-build");
 }
