@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
 import { isRustDeskInstalled, getRustDeskId } from "./rustdesk";
-import { getAppConfig } from "./get-app-config";
+import { getAppConfig } from "./getAppConfig";
 import { getSystemInfo } from "./system";
 import { debugLog } from "./debugLog";
 import { sleep } from "./sleep";
@@ -45,40 +45,43 @@ function App() {
 
       await debugLog(`RustDesk ID: ${rustdeskId}`);
 
-      const response = await fetch(
-        `${import.meta.env.VITE_BACKEND_URL}/rustdesk/devices`,
+      // const response = await fetch(
+      //   `${import.meta.env.VITE_BACKEND_URL}/rustdesk/devices`,
+      //   {
+      //     method: "POST",
+      //     headers: {
+      //       "Content-Type": "application/json",
+      //       "X-RustDesk-Key": config.token,
+      //     },
+      //     body: JSON.stringify({
+      //       device_id: rustdeskId,
+      //       password: config.password,
+      //       name: hostname,
+      //     }),
+      //   },
+      // );
+
+      // if (!response.ok) {
+      //   throw new Error(`Failed to register device: ${response.status}`);
+      // }
+
+      // await debugLog("=== Device registered ===");
+
+      await message(
+        "RustDesk has been successfully installed and configured.",
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-RustDesk-Key": config.token,
-          },
-          body: JSON.stringify({
-            device_id: rustdeskId,
-            password: config.password,
-            name: hostname,
-          }),
+          title: "Installation completed",
+          kind: "info",
         },
       );
-
-      if (!response.ok) {
-        throw new Error(`Failed to register device: ${response.status}`);
-      }
-
-      await debugLog("=== Device registered ===");
-
-      await message("RustDesk успешно установлен и настроен.", {
-        title: "Установка завершена",
-        kind: "info",
-      });
     } catch (err) {
       const msg =
-        err instanceof Error ? err.message : "Ошибка установки RustDesk";
+        err instanceof Error ? err.message : "RustDesk installation error";
 
       await debugLog(`INSTALL ERROR: ${msg}`);
 
       await message(msg, {
-        title: "Ошибка установки",
+        title: "Installation error",
         kind: "error",
       });
     } finally {
@@ -115,11 +118,11 @@ function App() {
       const msg =
         err instanceof Error
           ? err.message
-          : "Не удалось получить конфигурацию RustDesk.";
+          : "Failed to get RustDesk configuration.";
 
       await debugLog(msg);
       await message(msg, {
-        title: "Ошибка конфигурации",
+        title: "Configuration error",
         kind: "error",
       });
 
@@ -136,7 +139,7 @@ function App() {
 
       setInstalled(true);
 
-      await message("RustDesk уже установлен на этом компьютере.", {
+      await message("RustDesk is already installed on this computer.", {
         title: "RustDesk",
         kind: "warning",
       });
@@ -148,9 +151,33 @@ function App() {
   }
 
   return (
-    <div className="flex flex-col gap-8 items-center justify-center min-h-screen">
+    <div className="relative flex flex-col gap-8 items-center justify-center min-h-screen">
+      {processing && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4">
+            <div
+              className="
+            h-10 w-10
+            animate-spin
+            rounded-full
+            border-4
+            border-white/30
+            border-t-white
+          "
+            />
+
+            <span className="text-sm font-medium text-white">
+              {installed
+                ? "Reinstalling RustDesk..."
+                : "Installing RustDesk..."}
+            </span>
+          </div>
+        </div>
+      )}
+
       <div className="relative select-none">
-        <img src="/logo-white.png" alt="App Logo" className="h-[72px]" />
+        <img src="/logo-white.png" alt="App Logo" className="h-18" />
+
         <div className="absolute right-0 -bottom-1.5 text-base font-medium text-white tracking-[2px]">
           RustDesk Setup
         </div>
@@ -164,6 +191,7 @@ function App() {
           >
             Desktop:
           </label>
+
           <input
             type="text"
             value={hostname}
@@ -178,22 +206,22 @@ function App() {
           <button
             type="button"
             onClick={handleClose}
+            disabled={processing}
             className="
-              inline-flex items-center justify-center
-              rounded-md
-              border-0
-              bg-[#e44262]
-              px-4 py-2
-              text-sm font-medium text-white
-              shadow-sm
-              transition
-              hover:opacity-90
-              focus:outline-none
-              focus:ring-0
-              focus:border-0
-              disabled:cursor-not-allowed
-              disabled:opacity-50
-            "
+          inline-flex items-center justify-center
+          rounded-md
+          border-0
+          bg-[#e44262]
+          px-4 py-2
+          text-sm font-medium text-white
+          shadow-sm
+          transition
+          hover:opacity-90
+          focus:outline-none
+          focus:ring-0
+          disabled:cursor-not-allowed
+          disabled:opacity-50
+        "
           >
             Close
           </button>
@@ -201,58 +229,51 @@ function App() {
           {installed ? (
             <button
               type="button"
-              className="
-              inline-flex items-center justify-center
-              rounded-md
-              border-0
-              bg-[#67ae6f]
-              px-4 py-2
-              text-sm font-medium text-white
-              shadow-sm
-              transition
-              hover:opacity-90
-              focus:outline-none
-              focus:ring-0
-              focus:border-0
-              disabled:cursor-not-allowed
-              disabled:opacity-50
-            "
-              // onClick={handleReinstall}
               onClick={handleInstall}
               disabled={!config || processing}
+              className="
+            inline-flex items-center justify-center
+            rounded-md
+            border-0
+            bg-[#67ae6f]
+            px-4 py-2
+            text-sm font-medium text-white
+            shadow-sm
+            transition
+            hover:opacity-90
+            focus:outline-none
+            focus:ring-0
+            disabled:cursor-not-allowed
+            disabled:opacity-50
+          "
             >
-              {processing ? "Reinstalling..." : false ? "Run" : "Reinstall"}
+              {processing ? "Reinstalling..." : "Reinstall"}
             </button>
           ) : (
             <button
               type="button"
-              className="
-              inline-flex items-center justify-center
-              rounded-md
-              border-0
-              bg-[#67ae6f]
-              px-4 py-2
-              text-sm font-medium text-white
-              shadow-sm
-              transition
-              hover:opacity-90
-              focus:outline-none
-              focus:ring-0
-              focus:border-0
-              disabled:cursor-not-allowed
-              disabled:opacity-50
-            "
               onClick={handleInstall}
               disabled={!config || processing}
+              className="
+            inline-flex items-center justify-center
+            rounded-md
+            border-0
+            bg-[#67ae6f]
+            px-4 py-2
+            text-sm font-medium text-white
+            shadow-sm
+            transition
+            hover:opacity-90
+            focus:outline-none
+            focus:ring-0
+            disabled:cursor-not-allowed
+            disabled:opacity-50
+          "
             >
               {processing ? "Installing..." : "Install"}
             </button>
           )}
         </div>
-
-        {/* <pre className="max-w-[400px] overflow-auto">
-          {JSON.stringify({ config }, null, 2)}
-        </pre> */}
       </form>
     </div>
   );

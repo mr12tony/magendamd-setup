@@ -93,32 +93,32 @@ export async function getRustDeskId(): Promise<string | null> {
 //   throw new Error(`Unsupported OS: ${os}`);
 // }
 
-export async function getRustDeskConfig(): Promise<{
-  rendezvousServer: string;
-  relayServer: string;
-  key: string;
-  password: string;
-}> {
-  const response = await fetch(
-    `${import.meta.env.VITE_FRONTEND_URL}/api/rustdesk/config`,
-    {
-      method: "GET",
-      cache: "no-store",
-    },
-  );
+// export async function getRustDeskConfig(): Promise<{
+//   rendezvousServer: string;
+//   relayServer: string;
+//   key: string;
+//   password: string;
+// }> {
+//   const response = await fetch(
+//     `${import.meta.env.VITE_FRONTEND_URL}/api/rustdesk/config`,
+//     {
+//       method: "GET",
+//       cache: "no-store",
+//     },
+//   );
 
-  if (response.status === 403) {
-    throw new Error("API access forbidden");
-  }
+//   if (response.status === 403) {
+//     throw new Error("API access forbidden");
+//   }
 
-  if (!response.ok) {
-    throw new Error("Backend unavailable");
-  }
+//   if (!response.ok) {
+//     throw new Error("Backend unavailable");
+//   }
 
-  const config = await response.json();
+//   const config = await response.json();
 
-  return config;
-}
+//   return config;
+// }
 
 export async function openRustDesk(): Promise<void> {
   const os = platform();

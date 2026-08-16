@@ -1,5 +1,5 @@
-import { resolveResource } from "@tauri-apps/api/path";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+// import { resolveResource } from "@tauri-apps/api/path";
+// import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface AppConfig {

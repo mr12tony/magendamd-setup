@@ -373,6 +373,84 @@ log "[OWNER] Setting RustDesk ownership to $CONSOLE_USER..."
 chown -R "$CONSOLE_USER:staff" "$RUSTDESK_APP" >/dev/null 2>&1 || true
 
 # ============================================================
+# SYSTEM SERVICE
+# ============================================================
+
+separator
+log "[SERVICE] Installing RustDesk system service..."
+
+SERVICE_INSTALL_OUTPUT="$("$RUSTDESK" --install-service 2>&1)"
+SERVICE_INSTALL_EXIT=$?
+
+log "[SERVICE] Install-service exit code: $SERVICE_INSTALL_EXIT"
+
+if [ "$SERVICE_INSTALL_EXIT" -eq 0 ]; then
+    log "[SERVICE] RustDesk system service installation command succeeded."
+else
+    log "[SERVICE] WARNING: RustDesk system service installation command failed."
+    log "[SERVICE] Output: $SERVICE_INSTALL_OUTPUT"
+fi
+
+# ------------------------------------------------------------
+# Detect RustDesk launch daemon / service
+# ------------------------------------------------------------
+
+SERVICE_FOUND="NO"
+
+for i in $(seq 1 15); do
+
+    if launchctl list 2>/dev/null | grep -qi "rustdesk"; then
+        SERVICE_FOUND="YES"
+        break
+    fi
+
+    if [ -f "/Library/LaunchDaemons/com.carriez.RustDesk_service.plist" ]; then
+        SERVICE_FOUND="YES"
+        break
+    fi
+
+    if [ -f "/Library/LaunchDaemons/com.carriez.RustDesk.plist" ]; then
+        SERVICE_FOUND="YES"
+        break
+    fi
+
+    sleep 1
+done
+
+if [ "$SERVICE_FOUND" = "YES" ]; then
+    log "[SERVICE] RustDesk system service detected."
+else
+    log "[SERVICE] WARNING: RustDesk system service was not detected."
+fi
+
+# ------------------------------------------------------------
+# Show installed LaunchDaemon plist(s)
+# ------------------------------------------------------------
+
+log "[SERVICE] Checking /Library/LaunchDaemons..."
+
+for plist in /Library/LaunchDaemons/*RustDesk*.plist; do
+    if [ -f "$plist" ]; then
+        log "[SERVICE] Found plist: $plist"
+    fi
+done
+
+# ------------------------------------------------------------
+# Show launchctl RustDesk entries
+# ------------------------------------------------------------
+
+SERVICE_LIST="$(launchctl list 2>/dev/null | grep -i rustdesk || true)"
+
+if [ -n "$SERVICE_LIST" ]; then
+    log "[SERVICE] launchctl RustDesk entries:"
+    while IFS= read -r line; do
+        log "[SERVICE] $line"
+    done <<< "$SERVICE_LIST"
+else
+    log "[SERVICE] No RustDesk entry currently visible in launchctl."
+fi
+
+# ============================================================
 # RustDesk ID
 # ============================================================
 
@@ -386,19 +464,37 @@ log "[ID] Exit code: $ID_EXIT"
 log "[ID] Result: $ID_OUTPUT"
 
 # ============================================================
-# Start temporary backend
+# Start RustDesk backend
 # ============================================================
 
 separator
-log "[SERVER] Starting RustDesk server..."
+log "[SERVER] Starting RustDesk backend..."
 
-"$RUSTDESK" --server >/tmp/rustdesk-server.out 2>/tmp/rustdesk-server.err &
+SERVER_PID=""
 
-SERVER_PID=$!
+if [ "$SERVICE_FOUND" = "YES" ]; then
 
-log "[SERVER] PID: $SERVER_PID"
+    log "[SERVER] System service is installed."
+    log "[SERVER] Using installed RustDesk system service."
 
-sleep 2
+    # Даём launchd время запустить service.
+    sleep 2
+
+else
+
+    log "[SERVER] System service was not detected."
+    log "[SERVER] Starting temporary RustDesk backend..."
+
+    "$RUSTDESK" --server \
+        >/tmp/rustdesk-server.out \
+        2>/tmp/rustdesk-server.err &
+
+    SERVER_PID=$!
+
+    log "[SERVER] Temporary backend PID: $SERVER_PID"
+
+    sleep 2
+fi
 
 # ============================================================
 # Configure password
@@ -444,15 +540,25 @@ fi
 # ============================================================
 
 separator
-log "[SERVER] Stopping temporary RustDesk server..."
+log "[SERVER] Cleaning up temporary RustDesk backend..."
 
-kill "$SERVER_PID" >/dev/null 2>&1 || true
+if [ -n "$SERVER_PID" ]; then
 
-sleep 1
+    log "[SERVER] Stopping temporary backend PID: $SERVER_PID"
 
-kill -9 "$SERVER_PID" >/dev/null 2>&1 || true
+    kill "$SERVER_PID" >/dev/null 2>&1 || true
 
-log "[SERVER] Temporary server stopped."
+    sleep 1
+
+    kill -9 "$SERVER_PID" >/dev/null 2>&1 || true
+
+    log "[SERVER] Temporary backend stopped."
+
+else
+
+    log "[SERVER] No temporary backend was started."
+    log "[SERVER] System service remains installed."
+fi
 
 # ============================================================
 # Verify config files
@@ -497,6 +603,41 @@ FINAL_ID_EXIT=$?
 
 log "[ID] Exit code: $FINAL_ID_EXIT"
 log "[ID] Final result: $FINAL_ID"
+
+# ============================================================
+# FINAL SERVICE VERIFICATION
+# ============================================================
+
+separator
+log "[SERVICE] Final RustDesk service verification..."
+
+FINAL_SERVICE="NO"
+
+for plist in /Library/LaunchDaemons/*RustDesk*.plist; do
+    if [ -f "$plist" ]; then
+        log "[SERVICE] Installed LaunchDaemon: $plist"
+        FINAL_SERVICE="YES"
+    fi
+done
+
+FINAL_LAUNCHCTL="$(launchctl list 2>/dev/null | grep -i rustdesk || true)"
+
+if [ -n "$FINAL_LAUNCHCTL" ]; then
+
+    log "[SERVICE] RustDesk launchctl entry detected."
+
+    while IFS= read -r line; do
+        log "[SERVICE] $line"
+    done <<< "$FINAL_LAUNCHCTL"
+
+    FINAL_SERVICE="YES"
+fi
+
+if [ "$FINAL_SERVICE" = "YES" ]; then
+    log "[SERVICE] FINAL RESULT: RustDesk system service detected."
+else
+    log "[SERVICE] FINAL RESULT: WARNING - RustDesk system service NOT detected."
+fi
 
 # ============================================================
 # Result

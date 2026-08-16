@@ -720,6 +720,92 @@ catch {
 }
 
 # ============================================================
+# SERVICE AUTOSTART
+# ============================================================
+
+Write-Section "SERVICE AUTOSTART"
+
+$service = Get-Service `
+    -Name $ServiceName `
+    -ErrorAction SilentlyContinue
+
+if ($null -eq $service) {
+
+    Write-Log "ERROR: RustDesk service does not exist."
+
+    exit 1
+}
+
+Write-Log "Configuring RustDesk service for automatic startup..."
+
+try {
+
+    Set-Service `
+        -Name $ServiceName `
+        -StartupType Automatic `
+        -ErrorAction Stop
+
+    Write-Log "RustDesk service StartupType set to Automatic."
+}
+catch {
+
+    Write-Log "WARNING: Set-Service failed."
+    Write-Log $_.Exception.Message
+
+    try {
+
+        & sc.exe config $ServiceName start= auto 2>&1 |
+            ForEach-Object {
+                Write-Log "SC CONFIG: $_"
+            }
+
+        Write-Log "RustDesk service configured using sc.exe."
+    }
+    catch {
+
+        Write-Log "ERROR: Could not configure RustDesk service autostart."
+
+        exit 1
+    }
+}
+
+# ============================================================
+# VERIFY SERVICE AUTOSTART
+# ============================================================
+
+Write-Log "Verifying RustDesk service configuration..."
+
+$serviceInfo = & sc.exe qc $ServiceName 2>&1
+
+$serviceInfo |
+    ForEach-Object {
+        Write-Log "SC QC: $_"
+    }
+
+# Проверяем, что действительно установлен AUTO_START
+$autoStartConfirmed = $false
+
+foreach ($line in $serviceInfo) {
+
+    if ($line -match "START_TYPE.*AUTO_START") {
+
+        $autoStartConfirmed = $true
+        break
+    }
+}
+
+if ($autoStartConfirmed) {
+
+    Write-Log "RustDesk service AUTOSTART: CONFIRMED."
+}
+else {
+
+    Write-Log "ERROR: RustDesk service AUTOSTART was not confirmed."
+
+    exit 1
+}
+
+# ============================================================
 # START SERVICE
 # ============================================================
 
