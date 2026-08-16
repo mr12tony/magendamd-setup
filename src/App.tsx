@@ -45,27 +45,27 @@ function App() {
 
       await debugLog(`RustDesk ID: ${rustdeskId}`);
 
-      // const response = await fetch(
-      //   `${import.meta.env.VITE_BACKEND_URL}/rustdesk/devices`,
-      //   {
-      //     method: "POST",
-      //     headers: {
-      //       "Content-Type": "application/json",
-      //       "X-RustDesk-Key": config.token,
-      //     },
-      //     body: JSON.stringify({
-      //       device_id: rustdeskId,
-      //       password: config.password,
-      //       name: hostname,
-      //     }),
-      //   },
-      // );
+      const response = await fetch(
+        `${import.meta.env.VITE_BACKEND_URL}/rustdesk/devices`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-RustDesk-Key": config.token,
+          },
+          body: JSON.stringify({
+            device_id: rustdeskId,
+            password: config.password,
+            name: hostname,
+          }),
+        },
+      );
 
-      // if (!response.ok) {
-      //   throw new Error(`Failed to register device: ${response.status}`);
-      // }
+      if (!response.ok) {
+        throw new Error(`Failed to register device: ${response.status}`);
+      }
 
-      // await debugLog("=== Device registered ===");
+      await debugLog("=== Device registered ===");
 
       await message(
         "RustDesk has been successfully installed and configured.",
