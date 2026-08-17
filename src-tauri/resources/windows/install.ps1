@@ -9,6 +9,21 @@
 $ErrorActionPreference = "Stop"
 
 # ============================================================
+# ADMIN CHECK
+# ============================================================
+
+function Test-Administrator {
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+
+    return $principal.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+}
+
+# ============================================================
 # PATHS
 # ============================================================
 
@@ -56,21 +71,6 @@ function Write-Section {
     Write-Log "============================================================"
     Write-Log "[$Name]"
     Write-Log "============================================================"
-}
-
-# ============================================================
-# ADMIN CHECK
-# ============================================================
-
-function Test-Administrator {
-
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-
-    return $principal.IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator
-    )
 }
 
 # ============================================================
@@ -123,37 +123,80 @@ if (-not (Test-Administrator)) {
     try {
 
         # ----------------------------------------------------
-        # BUILD ELEVATED COMMAND
+        # Create payload
+        #
+        # Все данные кладём в JSON, затем Base64.
+        # Поэтому password/config никак не влияют
+        # на синтаксис команды PowerShell.
         # ----------------------------------------------------
 
-        $escapedScript = $ScriptPath.Replace('"', '\"')
-
-        $escapedPassword = ""
-        if ($null -ne $RustDeskPassword) {
-            $escapedPassword = $RustDeskPassword.Replace('"', '\"')
+        $payload = @{
+            ScriptPath = $ScriptPath
+            Password   = $RustDeskPassword
+            Config     = $RustDeskConfig
         }
 
-        $escapedConfig = ""
-        if ($null -ne $RustDeskConfig) {
-            $escapedConfig = $RustDeskConfig.Replace('"', '\"')
-        }
+        $payloadJson = $payload |
+            ConvertTo-Json -Compress
 
-        $elevatedArguments =
-            "-NoProfile -ExecutionPolicy Bypass " +
-            "-File `"$escapedScript`" " +
-            "`"$escapedPassword`" " +
-            "`"$escapedConfig`""
+        $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes(
+            $payloadJson
+        )
 
-        Write-Log "Starting elevated PowerShell..."
+        $payloadBase64 = [Convert]::ToBase64String(
+            $payloadBytes
+        )
+
+        Write-Log "Elevation payload created."
+        Write-Log "Payload length: $($payloadBase64.Length)"
+
+        # ----------------------------------------------------
+        # Elevated PowerShell command
+        # ----------------------------------------------------
+
+        $elevatedCommand = @"
+`$payloadBytes = [System.Convert]::FromBase64String('$payloadBase64')
+
+`$payloadJson = [System.Text.Encoding]::UTF8.GetString(
+    `$payloadBytes
+)
+
+`$payload = `$payloadJson | ConvertFrom-Json
+
+& `$payload.ScriptPath `
+    -RustDeskPassword `$payload.Password `
+    -RustDeskConfig `$payload.Config
+
+exit `$LASTEXITCODE
+"@
+
+        # PowerShell -EncodedCommand использует UTF-16LE
+        $commandBytes = [System.Text.Encoding]::Unicode.GetBytes(
+            $elevatedCommand
+        )
+
+        $encodedCommand = [Convert]::ToBase64String(
+            $commandBytes
+        )
+
+        Write-Log "Elevated command created."
 
         # ----------------------------------------------------
         # START UAC
         # ----------------------------------------------------
 
+        Write-Log "Starting elevated PowerShell..."
+
         $elevatedProcess = Start-Process `
             -FilePath "powershell.exe" `
             -Verb RunAs `
-            -ArgumentList $elevatedArguments `
+            -ArgumentList @(
+                "-NoProfile"
+                "-ExecutionPolicy"
+                "Bypass"
+                "-EncodedCommand"
+                $encodedCommand
+            ) `
             -PassThru
 
         if ($null -eq $elevatedProcess) {
@@ -167,20 +210,21 @@ if (-not (Test-Administrator)) {
         Write-Log "Elevated PID: $($elevatedProcess.Id)"
 
         # ----------------------------------------------------
-        # WAIT FOR ELEVATED PROCESS
+        # WAIT
         # ----------------------------------------------------
 
         Write-Log "Waiting for elevated PowerShell..."
 
         $elevatedProcess.WaitForExit()
 
+        Write-Log "Elevated PowerShell finished."
+
         $elevatedExitCode = $elevatedProcess.ExitCode
 
-        Write-Log "Elevated PowerShell finished."
         Write-Log "Elevated process exit code: $elevatedExitCode"
 
         # ----------------------------------------------------
-        # RETURN CHILD EXIT CODE
+        # RESULT
         # ----------------------------------------------------
 
         if ($elevatedExitCode -eq 0) {
@@ -189,12 +233,10 @@ if (-not (Test-Administrator)) {
 
             exit 0
         }
-        else {
 
-            Write-Log "ERROR: Elevated installation failed."
+        Write-Log "ERROR: Elevated installation failed."
 
-            exit $elevatedExitCode
-        }
+        exit $elevatedExitCode
     }
     catch {
 
@@ -398,7 +440,8 @@ if (Test-Path -LiteralPath $userLocal) {
         -ErrorAction SilentlyContinue
 }
 
-$localServiceData = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk"
+$localServiceData =
+    "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk"
 
 if (Test-Path -LiteralPath $localServiceData) {
 
@@ -543,11 +586,6 @@ Write-Log "Installing RustDesk service..."
 
 try {
 
-    #
-    # Не используем -Wait.
-    # Ждём появления Windows Service.
-    #
-
     $serviceProcess = Start-Process `
         -FilePath $RustDeskExe `
         -ArgumentList "--install-service" `
@@ -675,6 +713,7 @@ foreach ($line in $serviceInfo) {
     if ($line -match "START_TYPE.*AUTO_START") {
 
         $autoStartConfirmed = $true
+
         break
     }
 }
@@ -745,6 +784,7 @@ for ($i = 0; $i -lt 15; $i++) {
         if ($service.Status -eq "Running") {
 
             $running = $true
+
             break
         }
     }
