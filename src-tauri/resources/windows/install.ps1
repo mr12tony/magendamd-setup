@@ -3,25 +3,13 @@
     [string]$RustDeskPassword,
 
     [Parameter(Position = 1)]
-    [string]$RustDeskConfig
+    [string]$RustDeskConfig,
+
+    [Parameter()]
+    [switch]$Elevated
 )
 
 $ErrorActionPreference = "Stop"
-
-# ============================================================
-# ADMIN CHECK
-# ============================================================
-
-function Test-Administrator {
-
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-
-    return $principal.IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator
-    )
-}
 
 # ============================================================
 # PATHS
@@ -74,6 +62,21 @@ function Write-Section {
 }
 
 # ============================================================
+# ADMIN CHECK
+# ============================================================
+
+function Test-Administrator {
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+
+    return $principal.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+}
+
+# ============================================================
 # START
 # ============================================================
 
@@ -87,6 +90,7 @@ Write-Log "LogFile:      $LogFile"
 Write-Log "Current user: $env:USERNAME"
 Write-Log "User profile: $env:USERPROFILE"
 Write-Log "Is elevated:  $(Test-Administrator)"
+Write-Log "Elevated flag: $Elevated"
 
 # ============================================================
 # ARGUMENTS
@@ -123,66 +127,39 @@ if (-not (Test-Administrator)) {
     try {
 
         # ----------------------------------------------------
-        # Create payload
+        # IMPORTANT:
         #
-        # Все данные кладём в JSON, затем Base64.
-        # Поэтому password/config никак не влияют
-        # на синтаксис команды PowerShell.
+        # Формируем PowerShell-команду для elevated процесса.
+        #
+        # Json используется только для корректного quoting
+        # строк password/config.
         # ----------------------------------------------------
 
-        $payload = @{
-            ScriptPath = $ScriptPath
-            Password   = $RustDeskPassword
-            Config     = $RustDeskConfig
-        }
-
-        $payloadJson = $payload |
-            ConvertTo-Json -Compress
-
-        $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes(
-            $payloadJson
-        )
-
-        $payloadBase64 = [Convert]::ToBase64String(
-            $payloadBytes
-        )
-
-        Write-Log "Elevation payload created."
-        Write-Log "Payload length: $($payloadBase64.Length)"
-
-        # ----------------------------------------------------
-        # Elevated PowerShell command
-        # ----------------------------------------------------
+        $passwordLiteral = ConvertTo-Json $RustDeskPassword -Compress
+        $configLiteral   = ConvertTo-Json $RustDeskConfig -Compress
+        $scriptLiteral   = ConvertTo-Json $ScriptPath -Compress
 
         $elevatedCommand = @"
-`$payloadBytes = [System.Convert]::FromBase64String('$payloadBase64')
+`$ErrorActionPreference = 'Stop'
 
-`$payloadJson = [System.Text.Encoding]::UTF8.GetString(
-    `$payloadBytes
-)
-
-`$payload = `$payloadJson | ConvertFrom-Json
-
-& `$payload.ScriptPath `
-    -RustDeskPassword `$payload.Password `
-    -RustDeskConfig `$payload.Config
+& $scriptLiteral `
+    -RustDeskPassword $passwordLiteral `
+    -RustDeskConfig $configLiteral `
+    -Elevated
 
 exit `$LASTEXITCODE
 "@
 
         # PowerShell -EncodedCommand использует UTF-16LE
-        $commandBytes = [System.Text.Encoding]::Unicode.GetBytes(
-            $elevatedCommand
-        )
+        $bytes = [System.Text.Encoding]::Unicode.GetBytes($elevatedCommand)
 
-        $encodedCommand = [Convert]::ToBase64String(
-            $commandBytes
-        )
+        $encodedCommand = [Convert]::ToBase64String($bytes)
 
-        Write-Log "Elevated command created."
+        Write-Log "Elevation command created."
+        Write-Log "Encoded command length: $($encodedCommand.Length)"
 
         # ----------------------------------------------------
-        # START UAC
+        # START ELEVATED POWERSHELL
         # ----------------------------------------------------
 
         Write-Log "Starting elevated PowerShell..."
@@ -197,6 +174,7 @@ exit `$LASTEXITCODE
                 "-EncodedCommand"
                 $encodedCommand
             ) `
+            -WorkingDirectory $ScriptDir `
             -PassThru
 
         if ($null -eq $elevatedProcess) {
@@ -217,15 +195,10 @@ exit `$LASTEXITCODE
 
         $elevatedProcess.WaitForExit()
 
-        Write-Log "Elevated PowerShell finished."
-
         $elevatedExitCode = $elevatedProcess.ExitCode
 
+        Write-Log "Elevated PowerShell finished."
         Write-Log "Elevated process exit code: $elevatedExitCode"
-
-        # ----------------------------------------------------
-        # RESULT
-        # ----------------------------------------------------
 
         if ($elevatedExitCode -eq 0) {
 
@@ -233,10 +206,12 @@ exit `$LASTEXITCODE
 
             exit 0
         }
+        else {
 
-        Write-Log "ERROR: Elevated installation failed."
+            Write-Log "ERROR: Elevated installation failed."
 
-        exit $elevatedExitCode
+            exit $elevatedExitCode
+        }
     }
     catch {
 
@@ -310,7 +285,8 @@ Write-Log "Installer path: $selectedInstaller"
 
 if (-not (Test-Path -LiteralPath $selectedInstaller)) {
 
-    Write-Log "ERROR: Installer not found."
+    Write-Log "ERROR: Installer not found:"
+    Write-Log $selectedInstaller
 
     exit 1
 }
@@ -440,8 +416,7 @@ if (Test-Path -LiteralPath $userLocal) {
         -ErrorAction SilentlyContinue
 }
 
-$localServiceData =
-    "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk"
+$localServiceData = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk"
 
 if (Test-Path -LiteralPath $localServiceData) {
 
@@ -512,7 +487,7 @@ try {
     }
 
     # --------------------------------------------------------
-    # WAIT FOR INSTALLER TO FINISH
+    # WAIT INSTALLER
     # --------------------------------------------------------
 
     if (-not $installerProcess.HasExited) {
@@ -713,7 +688,6 @@ foreach ($line in $serviceInfo) {
     if ($line -match "START_TYPE.*AUTO_START") {
 
         $autoStartConfirmed = $true
-
         break
     }
 }
@@ -784,7 +758,6 @@ for ($i = 0; $i -lt 15; $i++) {
         if ($service.Status -eq "Running") {
 
             $running = $true
-
             break
         }
     }
