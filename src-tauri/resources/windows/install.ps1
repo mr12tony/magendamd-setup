@@ -3,13 +3,7 @@
     [string]$RustDeskPassword,
 
     [Parameter(Position = 1)]
-    [string]$RustDeskConfig,
-
-    [Parameter()]
-    [switch]$Elevated,
-
-    [Parameter()]
-    [string]$ArgsFile
+    [string]$RustDeskConfig
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,68 +89,6 @@ Write-Log "User profile: $env:USERPROFILE"
 Write-Log "Is elevated:  $(Test-Administrator)"
 
 # ============================================================
-# LOAD ARGUMENTS FROM TEMP FILE
-# ============================================================
-
-if (-not [string]::IsNullOrWhiteSpace($ArgsFile)) {
-
-    Write-Section "ARGS FILE"
-
-    Write-Log "ArgsFile received."
-    Write-Log "ArgsFile path: $ArgsFile"
-
-    if (-not (Test-Path -LiteralPath $ArgsFile)) {
-
-        Write-Log "ERROR: ArgsFile does not exist."
-
-        exit 1
-    }
-
-    try {
-
-        $json = Get-Content `
-            -LiteralPath $ArgsFile `
-            -Raw `
-            -Encoding UTF8
-
-        Write-Log "ArgsFile read successfully."
-
-        $data = $json | ConvertFrom-Json
-
-        if ($null -eq $data) {
-
-            Write-Log "ERROR: ArgsFile JSON is empty."
-
-            exit 1
-        }
-
-        if ($null -ne $data.Password) {
-            $RustDeskPassword = [string]$data.Password
-        }
-
-        if ($null -ne $data.Config) {
-            $RustDeskConfig = [string]$data.Config
-        }
-
-        Write-Log "Password loaded: YES"
-        Write-Log "Config loaded:   YES"
-        Write-Log "Config length:   $($RustDeskConfig.Length)"
-
-        Remove-Item `
-            -LiteralPath $ArgsFile `
-            -Force `
-            -ErrorAction SilentlyContinue
-    }
-    catch {
-
-        Write-Log "ERROR reading ArgsFile:"
-        Write-Log $_.Exception.Message
-
-        exit 1
-    }
-}
-
-# ============================================================
 # ARGUMENTS
 # ============================================================
 
@@ -188,38 +120,29 @@ if (-not (Test-Administrator)) {
     Write-Log "PowerShell is not running as Administrator."
     Write-Log "Requesting Administrator privileges through UAC..."
 
-    $TempArgsFile = Join-Path `
-        $env:TEMP `
-        "rustdesk-install-$PID-$([Guid]::NewGuid().ToString('N')).json"
-
     try {
 
         # ----------------------------------------------------
-        # SAVE PASSWORD + CONFIG
-        # ----------------------------------------------------
-
-        $argumentData = @{
-            Password = $RustDeskPassword
-            Config   = $RustDeskConfig
-        }
-
-        $argumentData |
-            ConvertTo-Json -Compress |
-            Set-Content `
-                -LiteralPath $TempArgsFile `
-                -Encoding UTF8
-
-        Write-Log "Elevation arguments file created."
-        Write-Log "ArgsFile: $TempArgsFile"
-
-        # ----------------------------------------------------
-        # BUILD POWERSHELL COMMAND
+        # BUILD ELEVATED COMMAND
         # ----------------------------------------------------
 
         $escapedScript = $ScriptPath.Replace('"', '\"')
-        $escapedArgs   = $TempArgsFile.Replace('"', '\"')
 
-        $elevatedArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$escapedScript`" -Elevated -ArgsFile `"$escapedArgs`""
+        $escapedPassword = ""
+        if ($null -ne $RustDeskPassword) {
+            $escapedPassword = $RustDeskPassword.Replace('"', '\"')
+        }
+
+        $escapedConfig = ""
+        if ($null -ne $RustDeskConfig) {
+            $escapedConfig = $RustDeskConfig.Replace('"', '\"')
+        }
+
+        $elevatedArguments =
+            "-NoProfile -ExecutionPolicy Bypass " +
+            "-File `"$escapedScript`" " +
+            "`"$escapedPassword`" " +
+            "`"$escapedConfig`""
 
         Write-Log "Starting elevated PowerShell..."
 
@@ -237,11 +160,6 @@ if (-not (Test-Administrator)) {
 
             Write-Log "ERROR: Failed to start elevated PowerShell."
 
-            Remove-Item `
-                -LiteralPath $TempArgsFile `
-                -Force `
-                -ErrorAction SilentlyContinue
-
             exit 1
         }
 
@@ -249,7 +167,7 @@ if (-not (Test-Administrator)) {
         Write-Log "Elevated PID: $($elevatedProcess.Id)"
 
         # ----------------------------------------------------
-        # WAIT
+        # WAIT FOR ELEVATED PROCESS
         # ----------------------------------------------------
 
         Write-Log "Waiting for elevated PowerShell..."
@@ -260,18 +178,6 @@ if (-not (Test-Administrator)) {
 
         Write-Log "Elevated PowerShell finished."
         Write-Log "Elevated process exit code: $elevatedExitCode"
-
-        # ----------------------------------------------------
-        # CLEANUP
-        # ----------------------------------------------------
-
-        if (Test-Path -LiteralPath $TempArgsFile) {
-
-            Remove-Item `
-                -LiteralPath $TempArgsFile `
-                -Force `
-                -ErrorAction SilentlyContinue
-        }
 
         # ----------------------------------------------------
         # RETURN CHILD EXIT CODE
@@ -294,14 +200,6 @@ if (-not (Test-Administrator)) {
 
         Write-Log "ERROR during UAC elevation:"
         Write-Log $_.Exception.Message
-
-        if (Test-Path -LiteralPath $TempArgsFile) {
-
-            Remove-Item `
-                -LiteralPath $TempArgsFile `
-                -Force `
-                -ErrorAction SilentlyContinue
-        }
 
         exit 1
     }
@@ -646,11 +544,8 @@ Write-Log "Installing RustDesk service..."
 try {
 
     #
-    # ВАЖНО:
-    #
     # Не используем -Wait.
-    # RustDesk --install-service в некоторых версиях может
-    # вести себя как долгоживущий процесс.
+    # Ждём появления Windows Service.
     #
 
     $serviceProcess = Start-Process `
@@ -660,10 +555,6 @@ try {
 
     Write-Log "Service installation process started."
     Write-Log "PID: $($serviceProcess.Id)"
-
-    #
-    # Ждём появления службы максимум 20 секунд.
-    #
 
     $serviceFound = $false
 
@@ -686,11 +577,6 @@ try {
 
         Start-Sleep -Seconds 1
     }
-
-    #
-    # Если RustDesk процесс ещё живёт после создания службы,
-    # принудительно закрываем только процесс установки службы.
-    #
 
     if (-not $serviceProcess.HasExited) {
 
@@ -782,7 +668,6 @@ $serviceInfo |
         Write-Log "SC QC: $_"
     }
 
-# Проверяем, что действительно установлен AUTO_START
 $autoStartConfirmed = $false
 
 foreach ($line in $serviceInfo) {
@@ -842,10 +727,6 @@ if ($service.Status -ne "Running") {
         Write-Log $_.Exception.Message
     }
 }
-
-#
-# Проверяем максимум 15 секунд.
-#
 
 $running = $false
 
