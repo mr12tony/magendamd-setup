@@ -4,9 +4,7 @@
     "version": "0.1.0",
     "identifier": "com.mr12tony.magendamd-setup",
     "bundle": {
-        "targets": [
-            "nsis"
-        ],
+        "active": false,
         "resources": [
             "resources/windows"
         ]
