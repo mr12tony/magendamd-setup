@@ -353,15 +353,32 @@ Write-Log "Installer exists."
 Write-Log "Installer size: $([math]::Round($installerFile.Length / 1MB, 2)) MB"
 
 # ============================================================
-# CLEANUP
+# CLEANUP (УДАЛЕНИЕ СТАРОЙ УСТАНОВКИ ИЛИ СЛУЖБЫ)
 # ============================================================
 
 Write-Section "CLEANUP"
 
-# ------------------------------------------------------------
-# STOP RUSTDESK PROCESSES
-# ------------------------------------------------------------
+# 1. Попытка вызвать штатный деинсталлятор, если программа уже была установлена
+if (Test-Path -LiteralPath $RustDeskExe) {
+    Write-Log "Existing RustDesk installation detected. Running uninstaller..."
+    try {
+        $uninstallProcess = Start-Process `
+            -FilePath $RustDeskExe `
+            -ArgumentList "--uninstall" `
+            -PassThru `
+            -ErrorAction SilentlyContinue
+        
+        if ($null -ne $uninstallProcess) {
+            $uninstallProcess.WaitForExit(10000)
+            Write-Log "Uninstaller executed."
+        }
+    }
+    catch {
+        Write-Log "WARNING: Uninstaller failed or timed out."
+    }
+}
 
+# 2. Остановка всех процессов rustdesk
 Write-Log "Stopping RustDesk processes..."
 
 Get-Process `
@@ -375,10 +392,7 @@ Start-Sleep -Seconds 2
 
 Write-Log "RustDesk processes stopped."
 
-# ------------------------------------------------------------
-# STOP / REMOVE SERVICE
-# ------------------------------------------------------------
-
+# 3. Остановка и удаление службы Windows
 Write-Log "Checking RustDesk service..."
 
 $service = Get-Service `
@@ -387,8 +401,7 @@ $service = Get-Service `
 
 if ($null -ne $service) {
 
-    Write-Log "RustDesk service exists."
-    Write-Log "Current status: $($service.Status)"
+    Write-Log "RustDesk service exists. Current status: $($service.Status)"
 
     if ($service.Status -eq "Running") {
 
@@ -416,15 +429,12 @@ else {
     Write-Log "RustDesk service does not exist."
 }
 
-# ------------------------------------------------------------
-# REMOVE OLD PROGRAM FILES
-# ------------------------------------------------------------
-
+# 4. Удаление старых файлов из Program Files
 $oldInstallDir = Join-Path ${env:ProgramFiles} "RustDesk"
 
 if (Test-Path -LiteralPath $oldInstallDir) {
 
-    Write-Log "Removing old RustDesk installation..."
+    Write-Log "Removing old RustDesk installation files..."
 
     try {
 
@@ -434,19 +444,15 @@ if (Test-Path -LiteralPath $oldInstallDir) {
             -Force `
             -ErrorAction Stop
 
-        Write-Log "Old RustDesk installation removed."
+        Write-Log "Old RustDesk installation files removed."
     }
     catch {
 
-        Write-Log "WARNING: Could not completely remove old installation."
+        Write-Log "WARNING: Could not completely remove old installation directory."
         Write-Log $_.Exception.Message
     }
 
     Start-Sleep -Seconds 2
-}
-else {
-
-    Write-Log "Old RustDesk installation not found."
 }
 
 # ============================================================
@@ -464,8 +470,7 @@ try {
         -ArgumentList "--silent-install" `
         -PassThru
 
-    Write-Log "RustDesk installer process started."
-    Write-Log "Installer PID: $($installerProcess.Id)"
+    Write-Log "RustDesk installer process started. PID: $($installerProcess.Id)"
 }
 catch {
 
@@ -489,8 +494,7 @@ for ($i = 0; $i -lt 60; $i++) {
 
         $found = $true
 
-        Write-Log "RustDesk executable detected."
-        Write-Log "Path: $RustDeskExe"
+        Write-Log "RustDesk executable detected at: $RustDeskExe"
 
         break
     }
@@ -502,12 +506,9 @@ if (-not $found) {
 
     Write-Log "ERROR: RustDesk executable was not detected after 60 seconds."
 
-    # Если installer всё ещё работает — остановить его.
     try {
 
         if (-not $installerProcess.HasExited) {
-
-            Write-Log "RustDesk installer process is still running."
 
             Stop-Process `
                 -Id $installerProcess.Id `
@@ -522,11 +523,7 @@ if (-not $found) {
 }
 
 Write-Log "RustDesk installation detected successfully."
-
-# Даём установщику немного времени закончить регистрацию файлов.
 Start-Sleep -Seconds 3
-
-Write-Log "Continuing with service installation."
 
 # ============================================================
 # VERIFY EXECUTABLE
@@ -534,52 +531,109 @@ Write-Log "Continuing with service installation."
 
 Write-Section "VERIFY"
 
-if (-not (Test-Path -LiteralPath $RustDeskExe)) {
-
-    Write-Log "ERROR: RustDesk executable does not exist."
-
-    exit 1
-}
-
 $installedFile = Get-Item -LiteralPath $RustDeskExe
 
 Write-Log "RustDesk executable: $RustDeskExe"
 Write-Log "Installed size: $([math]::Round($installedFile.Length / 1MB, 2)) MB"
 
-try {
+# ============================================================
+# CONFIG (ПРИМЕНЯЕМ КОНФИГ ДО СТАРА СЛУЖБЫ)
+# ============================================================
 
-    $versionInfo = $installedFile.VersionInfo
+Write-Section "CONFIG"
 
-    Write-Log "Product version: $($versionInfo.ProductVersion)"
-    Write-Log "File version: $($versionInfo.FileVersion)"
+if (-not [string]::IsNullOrWhiteSpace($RustDeskConfig)) {
+
+    Write-Log "Applying RustDesk configuration..."
+
+    try {
+
+        # 1. Запись конфига через CLI
+        $configProcess = Start-Process `
+            -FilePath $RustDeskExe `
+            -ArgumentList @(
+                "--config",
+                $RustDeskConfig
+            ) `
+            -PassThru `
+            -Wait
+
+        Write-Log "RustDesk --config exit code: $($configProcess.ExitCode)"
+
+        # 2. Прямая запись в системный каталог ProgramData (для гарантии подхвата)
+        $programDataConfigDir = Join-Path ${env:ProgramData} "RustDesk\config"
+
+        if (-not (Test-Path -LiteralPath $programDataConfigDir)) {
+            New-Item -Path $programDataConfigDir -ItemType Directory -Force | Out-Null
+        }
+
+        $tomlPath = Join-Path $programDataConfigDir "RustDesk2.toml"
+        $tomlContent = "config = '$RustDeskConfig'"
+        Set-Content -Path $tomlPath -Value $tomlContent -Encoding UTF8 -Force
+
+        Write-Log "Forced config file created at: $tomlPath"
+    }
+    catch {
+
+        Write-Log "WARNING: Failed to apply configuration."
+        Write-Log $_.Exception.Message
+    }
 }
-catch {
+else {
 
-    Write-Log "WARNING: Could not read RustDesk version."
+    Write-Log "Config is empty. Skipping configuration."
+}
+
+# ============================================================
+# PASSWORD (УСТАНАВЛИВАЕМ ПАРОЛЬ ДО СТАРТА СЛУЖБЫ)
+# ============================================================
+
+Write-Section "PASSWORD"
+
+if (-not [string]::IsNullOrWhiteSpace($RustDeskPassword)) {
+
+    Write-Log "Applying RustDesk permanent password..."
+
+    try {
+
+        $passwordProcess = Start-Process `
+            -FilePath $RustDeskExe `
+            -ArgumentList @(
+                "--password",
+                $RustDeskPassword
+            ) `
+            -PassThru `
+            -Wait
+
+        Write-Log "RustDesk --password exit code: $($passwordProcess.ExitCode)"
+    }
+    catch {
+
+        Write-Log "WARNING: Failed to apply password."
+        Write-Log $_.Exception.Message
+    }
+}
+else {
+
+    Write-Log "Password is empty. Skipping password."
 }
 
 # ============================================================
 # SERVICE INSTALL
 # ============================================================
 
-Write-Section "SERVICE"
+Write-Section "SERVICE INSTALL"
 
 Write-Log "Installing RustDesk service..."
 
 try {
-
-    # ВАЖНО:
-    # НЕ используем -Wait.
-    #
-    # Ждём появления службы отдельно.
 
     $serviceProcess = Start-Process `
         -FilePath $RustDeskExe `
         -ArgumentList "--install-service" `
         -PassThru
 
-    Write-Log "Service installation process started."
-    Write-Log "PID: $($serviceProcess.Id)"
+    Write-Log "Service installation process started. PID: $($serviceProcess.Id)"
 }
 catch {
 
@@ -608,7 +662,6 @@ for ($i = 0; $i -lt 30; $i++) {
         $serviceFound = $true
 
         Write-Log "RustDesk service found."
-        Write-Log "Display name: $($service.DisplayName)"
         Write-Log "Status: $($service.Status)"
 
         break
@@ -617,21 +670,14 @@ for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 1
 }
 
-# Если процесс установки службы всё ещё работает,
-# закрываем его после появления службы.
-
 try {
 
     if (-not $serviceProcess.HasExited) {
-
-        Write-Log "Service installation process is still running."
 
         Stop-Process `
             -Id $serviceProcess.Id `
             -Force `
             -ErrorAction SilentlyContinue
-
-        Write-Log "Service installation process stopped."
     }
 }
 catch {
@@ -645,10 +691,10 @@ if (-not $serviceFound) {
 }
 
 # ============================================================
-# SERVICE AUTOSTART
+# SERVICE AUTOSTART & START
 # ============================================================
 
-Write-Section "SERVICE AUTOSTART"
+Write-Section "SERVICE AUTOSTART & START"
 
 Write-Log "Configuring RustDesk service for automatic startup..."
 
@@ -663,199 +709,51 @@ try {
 }
 catch {
 
-    Write-Log "WARNING: Set-Service failed."
-    Write-Log $_.Exception.Message
-
-    Write-Log "Trying sc.exe..."
-
-    try {
-
-        & sc.exe config $ServiceName start= auto 2>&1 |
-            ForEach-Object {
-                Write-Log "SC CONFIG: $_"
-            }
-
-        Write-Log "Service configured using sc.exe."
-    }
-    catch {
-
-        Write-Log "ERROR: Could not configure service autostart."
-
-        exit 1
-    }
+    & sc.exe config $ServiceName start= auto 2>&1 | ForEach-Object { Write-Log "SC CONFIG: $_" }
 }
 
-# ============================================================
-# VERIFY AUTOSTART
-# ============================================================
+# Запуск / Перезапуск службы, чтобы подхватить настойки из RustDesk2.toml
+Write-Log "Starting/Restarting RustDesk service..."
 
-Write-Log "Verifying service configuration..."
+try {
 
-$serviceInfo = & sc.exe qc $ServiceName 2>&1
+    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 
-$serviceInfo |
-    ForEach-Object {
-        Write-Log "SC QC: $_"
+    if ($service.Status -eq "Running") {
+        Restart-Service -Name $ServiceName -Force -ErrorAction Stop
+    }
+    else {
+        Start-Service -Name $ServiceName -ErrorAction Stop
     }
 
-# ============================================================
-# START SERVICE
-# ============================================================
+    Write-Log "Service start command issued."
+}
+catch {
 
-Write-Section "SERVICE START"
-
-$service = Get-Service `
-    -Name $ServiceName `
-    -ErrorAction SilentlyContinue
-
-if ($null -eq $service) {
-
-    Write-Log "ERROR: RustDesk service does not exist."
-
-    exit 1
+    Write-Log "WARNING: Failed to start/restart service via cmdlet. Trying sc.exe start..."
+    & sc.exe start $ServiceName 2>&1 | ForEach-Object { Write-Log "SC START: $_" }
 }
 
-Write-Log "Current service status: $($service.Status)"
-
-if ($service.Status -ne "Running") {
-
-    Write-Log "Starting RustDesk service..."
-
-    try {
-
-        Start-Service `
-            -Name $ServiceName `
-            -ErrorAction Stop
-
-        Write-Log "Start-Service completed."
-    }
-    catch {
-
-        Write-Log "WARNING: Start-Service failed."
-        Write-Log $_.Exception.Message
-    }
-}
-
-# ------------------------------------------------------------
-# WAIT FOR RUNNING
-# ------------------------------------------------------------
-
+# Ожидание подтверждения статуса Running
 $running = $false
 
 for ($i = 0; $i -lt 20; $i++) {
 
     Start-Sleep -Seconds 1
 
-    $service = Get-Service `
-        -Name $ServiceName `
-        -ErrorAction SilentlyContinue
+    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 
-    if ($null -ne $service) {
-
-        Write-Log "Service status: $($service.Status)"
-
-        if ($service.Status -eq "Running") {
-
-            $running = $true
-
-            break
-        }
+    if ($null -ne $service -and $service.Status -eq "Running") {
+        $running = $true
+        break
     }
 }
 
 if ($running) {
-
-    Write-Log "RustDesk service is running."
+    Write-Log "RustDesk service is active and running."
 }
 else {
-
-    Write-Log "WARNING: RustDesk service is not running."
-}
-
-# ============================================================
-# CONFIG
-# ============================================================
-
-Write-Section "CONFIG"
-
-if (-not [string]::IsNullOrWhiteSpace($RustDeskConfig)) {
-
-    Write-Log "Applying RustDesk configuration..."
-
-    try {
-
-        $configProcess = Start-Process `
-            -FilePath $RustDeskExe `
-            -ArgumentList @(
-                "--config",
-                $RustDeskConfig
-            ) `
-            -PassThru `
-            -Wait
-
-        Write-Log "RustDesk --config exit code: $($configProcess.ExitCode)"
-
-        if ($configProcess.ExitCode -eq 0) {
-
-            Write-Log "RustDesk configuration applied."
-        }
-        else {
-
-            Write-Log "WARNING: Configuration returned non-zero exit code."
-        }
-    }
-    catch {
-
-        Write-Log "WARNING: Failed to apply configuration."
-        Write-Log $_.Exception.Message
-    }
-}
-else {
-
-    Write-Log "Config is empty. Skipping configuration."
-}
-
-# ============================================================
-# PASSWORD
-# ============================================================
-
-Write-Section "PASSWORD"
-
-if (-not [string]::IsNullOrWhiteSpace($RustDeskPassword)) {
-
-    Write-Log "Applying RustDesk permanent password..."
-
-    try {
-
-        $passwordProcess = Start-Process `
-            -FilePath $RustDeskExe `
-            -ArgumentList @(
-                "--password",
-                $RustDeskPassword
-            ) `
-            -PassThru `
-            -Wait
-
-        Write-Log "RustDesk --password exit code: $($passwordProcess.ExitCode)"
-
-        if ($passwordProcess.ExitCode -eq 0) {
-
-            Write-Log "RustDesk password applied."
-        }
-        else {
-
-            Write-Log "WARNING: Password command returned non-zero exit code."
-        }
-    }
-    catch {
-
-        Write-Log "WARNING: Failed to apply password."
-        Write-Log $_.Exception.Message
-    }
-}
-else {
-
-    Write-Log "Password is empty. Skipping password."
+    Write-Log "WARNING: RustDesk service is not in Running state."
 }
 
 # ============================================================
