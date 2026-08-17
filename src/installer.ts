@@ -47,8 +47,11 @@ export async function installRustDeskWindows(config: AppConfig): Promise<void> {
 
   const result = await Command.create("powershell", [
     "-NoProfile",
+    "-NonInteractive",
     "-ExecutionPolicy",
     "Bypass",
+    "-WindowStyle",
+    "Hidden",
     "-File",
     script,
     config.password,
