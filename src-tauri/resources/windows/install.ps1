@@ -172,6 +172,8 @@ if (-not $isAdmin) {
             "-NoProfile"
             "-ExecutionPolicy"
             "Bypass"
+            "-WindowStyle"
+            "Hidden"
             "-File"
             "`"$PSCommandPath`""
         )

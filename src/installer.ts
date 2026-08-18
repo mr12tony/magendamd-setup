@@ -49,6 +49,8 @@ export async function installRustDeskWindows(config: AppConfig): Promise<void> {
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
+    "-WindowStyle",
+    "Hidden",
     "-File",
     script,
     config.password,
