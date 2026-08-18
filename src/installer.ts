@@ -45,7 +45,7 @@ export async function installRustDeskWindows(config: AppConfig): Promise<void> {
 
   await debugLog(`Windows installer: ${script}`);
 
-  const result = await Command.create("powershell.exe", [
+  const result = await Command.create("powershell", [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
