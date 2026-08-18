@@ -709,13 +709,22 @@ $service = Get-Service `
     -Name $ServiceName `
     -ErrorAction SilentlyContinue
 
+# if ($null -eq $service) {
+
+#     Write-Host ""
+#     Write-Host "ERROR: RustDesk service does not exist." -ForegroundColor Red
+#     Write-Host ""
+
+#     exit 1
+# }
+
 if ($null -eq $service) {
-
-    Write-Host ""
-    Write-Host "ERROR: RustDesk service does not exist." -ForegroundColor Red
-    Write-Host ""
-
-    exit 1
+    Write-Host "RustDesk service is not installed."
+    Write-Host "GUI remains running."
+}
+else {
+    Start-Service -Name $ServiceName
+    Write-Host "RustDesk service started."
 }
 
 
