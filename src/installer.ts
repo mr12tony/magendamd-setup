@@ -17,24 +17,24 @@ export const RUSTDESK_MACOS_PATH = "/Applications/RustDesk.app";
 export async function installRustDeskMacOS(config: AppConfig): Promise<void> {
   const script = await resolveResource("resources/macos/install.sh");
 
-  await debugLog(`macOS installer: ${script}`);
+  await debugLog(`macOS RustDesk installer:\n` + `script=${script}`);
 
   const result = await Command.create("bash", [
     script,
     config.password,
-    config.config,
   ]).execute();
 
   await debugLog(
-    `macOS installer exit=${result.code}\n` +
+    `macOS RustDesk installer finished\n` +
+      `exit=${result.code}\n` +
       `stdout=${result.stdout}\n` +
       `stderr=${result.stderr}`,
   );
 
   if (result.code !== 0) {
     throw new Error(
-      result.stderr ||
-        result.stdout ||
+      result.stderr?.trim() ||
+        result.stdout?.trim() ||
         `macOS RustDesk installer failed: ${result.code}`,
     );
   }
