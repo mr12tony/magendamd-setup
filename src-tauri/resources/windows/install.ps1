@@ -5,38 +5,15 @@
     [Parameter()]
     [string]$PasswordFile,
 
+    # Эти параметры используются только при повторном запуске после UAC.
     [Parameter()]
-    [string]$TargetUser,
+    [string]$RealUserName,
 
     [Parameter()]
-    [string]$TargetAppData
+    [string]$RealUserProfile
 )
 
 $ErrorActionPreference = "Stop"
-
-# ============================================================
-# RUSTDESK WINDOWS LOCAL INSTALL + CONFIG + PASSWORD
-#
-# Files expected next to this script:
-#
-#   install-rustdesk.ps1
-#   RustDesk2.toml
-#   RustDesk-*-x86_64.exe
-#   RustDesk-*-aarch64.exe
-#
-# Usage:
-#
-#   .\install-rustdesk.ps1 MyPassword123
-#
-# Or:
-#
-#   .\install-rustdesk.ps1
-#
-# If password is not provided:
-#   random password will be generated.
-#
-# ============================================================
-
 
 # ============================================================
 # SETTINGS
@@ -44,50 +21,97 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = $PSScriptRoot
 
-$ConfigSource = Join-Path `
-    $ScriptDir `
-    "RustDesk2.toml"
-
-$ProgramFilesRustDesk = Join-Path `
-    $env:ProgramFiles `
-    "RustDesk"
-
-$RustDeskExe = Join-Path `
-    $ProgramFilesRustDesk `
-    "RustDesk.exe"
+$ConfigSource = Join-Path $ScriptDir "RustDesk2.toml"
 
 $ServiceName = "RustDesk"
 
+$ProgramFilesRustDesk = Join-Path ${env:ProgramFiles} "RustDesk"
+$RustDeskExe = Join-Path $ProgramFilesRustDesk "RustDesk.exe"
+
+$UserConfigDir = $null
+$UserConfig = $null
+$UserPasswordConfig = $null
+
+$SystemConfigDir = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
+$SystemConfig = Join-Path $SystemConfigDir "RustDesk2.toml"
+$SystemPasswordConfig = Join-Path $SystemConfigDir "RustDesk.toml"
+
 
 # ============================================================
-# DETERMINE REAL USER
+# ORIGINAL USER
 # ============================================================
 
-if ([string]::IsNullOrWhiteSpace($TargetUser)) {
+# Важно:
+# После UAC $env:USERNAME уже может быть Administrator.
+# Поэтому сохраняем пользователя ДО elevation.
 
-    $OriginalUser = $env:USERNAME
+if ([string]::IsNullOrWhiteSpace($RealUserName)) {
 
+    $RealUserName = $env:USERNAME
+}
+
+if ([string]::IsNullOrWhiteSpace($RealUserProfile)) {
+
+    $RealUserProfile = $env:USERPROFILE
+}
+
+
+# ============================================================
+# PASSWORD FROM TEMP FILE
+# ============================================================
+
+if (-not [string]::IsNullOrWhiteSpace($PasswordFile)) {
+
+    if (-not (Test-Path -LiteralPath $PasswordFile)) {
+
+        Write-Host ""
+        Write-Host "ERROR: Password file not found." -ForegroundColor Red
+        Write-Host ""
+
+        exit 1
+    }
+
+    $RustDeskPassword = (
+        Get-Content `
+            -LiteralPath $PasswordFile `
+            -Raw `
+            -Encoding UTF8
+    ).Trim()
+
+    Remove-Item `
+        -LiteralPath $PasswordFile `
+        -Force `
+        -ErrorAction SilentlyContinue
+}
+
+
+# ============================================================
+# PASSWORD
+# ============================================================
+
+if ([string]::IsNullOrWhiteSpace($RustDeskPassword)) {
+
+    $bytes = New-Object byte[] 12
+
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+
+    try {
+        $rng.GetBytes($bytes)
+    }
+    finally {
+        $rng.Dispose()
+    }
+
+    $RustDeskPassword = (
+        [Convert]::ToBase64String($bytes) `
+            -replace '[^a-zA-Z0-9]', ''
+    ).Substring(0, 16)
+
+    $PasswordGenerated = $true
 }
 else {
 
-    $OriginalUser = $TargetUser
-
-}
-
-
-# ============================================================
-# DETERMINE REAL APPDATA
-# ============================================================
-
-if ([string]::IsNullOrWhiteSpace($TargetAppData)) {
-
-    $OriginalAppData = $env:APPDATA
-
-}
-else {
-
-    $OriginalAppData = $TargetAppData
-
+    $PasswordGenerated = $false
 }
 
 
@@ -97,10 +121,7 @@ else {
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 
-$principal = New-Object `
-    Security.Principal.WindowsPrincipal(
-        $identity
-    )
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
 
 $isAdmin = $principal.IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator
@@ -123,7 +144,8 @@ if (-not $isAdmin) {
     $TempPasswordFile = ""
 
     # --------------------------------------------------------
-    # Save password temporarily if supplied
+    # Password передаём через временный файл.
+    # Не помещаем пароль в command line.
     # --------------------------------------------------------
 
     if (-not [string]::IsNullOrWhiteSpace($RustDeskPassword)) {
@@ -138,7 +160,6 @@ if (-not $isAdmin) {
             -Encoding UTF8
     }
 
-
     try {
 
         $argumentList = @(
@@ -147,12 +168,11 @@ if (-not $isAdmin) {
             "Bypass"
             "-File"
             "`"$PSCommandPath`""
-            "-TargetUser"
-            "`"$OriginalUser`""
-            "-TargetAppData"
-            "`"$OriginalAppData`""
+            "-RealUserName"
+            "`"$RealUserName`""
+            "-RealUserProfile"
+            "`"$RealUserProfile`""
         )
-
 
         if (-not [string]::IsNullOrWhiteSpace($TempPasswordFile)) {
 
@@ -162,7 +182,6 @@ if (-not $isAdmin) {
             )
         }
 
-
         $elevatedProcess = Start-Process `
             -FilePath "powershell.exe" `
             -Verb RunAs `
@@ -170,21 +189,17 @@ if (-not $isAdmin) {
             -WorkingDirectory $ScriptDir `
             -PassThru
 
-
+        # Важно:
+        # ждём именно elevated script, чтобы Tauri получил завершение.
         $elevatedProcess.WaitForExit()
 
         $exitCode = $elevatedProcess.ExitCode
-
     }
     catch {
 
         Write-Host ""
-        Write-Host "ERROR: Failed to start elevated PowerShell." `
-            -ForegroundColor Red
-
-        Write-Host $_.Exception.Message `
-            -ForegroundColor Red
-
+        Write-Host "ERROR: Failed to start elevated PowerShell." -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
         Write-Host ""
 
         exit 1
@@ -203,79 +218,7 @@ if (-not $isAdmin) {
         }
     }
 
-
     exit $exitCode
-}
-
-
-# ============================================================
-# PASSWORD FROM TEMP FILE
-# ============================================================
-
-if (-not [string]::IsNullOrWhiteSpace($PasswordFile)) {
-
-    if (-not (Test-Path -LiteralPath $PasswordFile)) {
-
-        Write-Host ""
-        Write-Host "ERROR: Password file not found." `
-            -ForegroundColor Red
-
-        Write-Host ""
-
-        exit 1
-    }
-
-
-    $RustDeskPassword = (
-        Get-Content `
-            -LiteralPath $PasswordFile `
-            -Raw `
-            -Encoding UTF8
-    ).Trim()
-
-
-    Remove-Item `
-        -LiteralPath $PasswordFile `
-        -Force `
-        -ErrorAction SilentlyContinue
-}
-
-
-# ============================================================
-# GENERATE PASSWORD
-# ============================================================
-
-if ([string]::IsNullOrWhiteSpace($RustDeskPassword)) {
-
-    $bytes = New-Object byte[] 12
-
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-
-    try {
-
-        $rng.GetBytes($bytes)
-
-    }
-    finally {
-
-        $rng.Dispose()
-
-    }
-
-
-    $RustDeskPassword = (
-        [Convert]::ToBase64String($bytes) `
-            -replace '[^a-zA-Z0-9]', ''
-    ).Substring(0, 16)
-
-
-    $PasswordGenerated = $true
-
-}
-else {
-
-    $PasswordGenerated = $false
-
 }
 
 
@@ -284,8 +227,8 @@ else {
 # ============================================================
 
 $UserConfigDir = Join-Path `
-    $OriginalAppData `
-    "RustDesk\config"
+    $RealUserProfile `
+    "AppData\Roaming\RustDesk\config"
 
 $UserConfig = Join-Path `
     $UserConfigDir `
@@ -296,42 +239,27 @@ $UserPasswordConfig = Join-Path `
     "RustDesk.toml"
 
 
-# ------------------------------------------------------------
-# RustDesk Windows service runs as LocalService
-# ------------------------------------------------------------
-
-$SystemConfigDir = `
-    "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
-
-$SystemConfig = Join-Path `
-    $SystemConfigDir `
-    "RustDesk2.toml"
-
-$SystemPasswordConfig = Join-Path `
-    $SystemConfigDir `
-    "RustDesk.toml"
-
-
 # ============================================================
 # HEADER
 # ============================================================
 
 Write-Host ""
 Write-Host "============================================================"
-Write-Host "       RUSTDESK WINDOWS LOCAL INSTALL + CONFIG + PASSWORD"
+Write-Host "          RUSTDESK WINDOWS LOCAL INSTALL"
+Write-Host "                 CONFIG + PASSWORD"
 Write-Host "============================================================"
 Write-Host ""
 
-Write-Host "Target user:"
-Write-Host "  $OriginalUser"
-
-Write-Host ""
-Write-Host "Target APPDATA:"
-Write-Host "  $OriginalAppData"
-
-Write-Host ""
 Write-Host "Script directory:"
 Write-Host "  $ScriptDir"
+
+Write-Host ""
+Write-Host "Real user:"
+Write-Host "  $RealUserName"
+
+Write-Host ""
+Write-Host "Real user profile:"
+Write-Host "  $RealUserProfile"
 
 Write-Host ""
 Write-Host "Config source:"
@@ -342,9 +270,18 @@ Write-Host "RustDesk executable:"
 Write-Host "  $RustDeskExe"
 
 Write-Host ""
+Write-Host "User RustDesk2.toml:"
+Write-Host "  $UserConfig"
+
+Write-Host ""
+Write-Host "System RustDesk2.toml:"
+Write-Host "  $SystemConfig"
+
+Write-Host ""
+
 
 # ============================================================
-# DETECT ARCHITECTURE
+# FIND LOCAL EXE BY ARCHITECTURE
 # ============================================================
 
 Write-Host "Detecting Windows architecture..."
@@ -353,35 +290,29 @@ $Architecture = $env:PROCESSOR_ARCHITECTURE
 
 if (
     $Architecture -eq "ARM64" -or
-    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture `
-        -eq [System.Runtime.InteropServices.Architecture]::Arm64
+    $env:PROCESSOR_ARCHITEW6432 -eq "ARM64"
 ) {
 
-    $ArchitectureName = "ARM64"
-
     $ExePatterns = @(
-        "*aarch64*.exe",
-        "*arm64*.exe"
+        "*arm64*.exe",
+        "*aarch64*.exe"
     )
 
+    Write-Host "Architecture: ARM64"
 }
 else {
-
-    $ArchitectureName = "x86_64"
 
     $ExePatterns = @(
         "*x86_64*.exe",
         "*x64*.exe"
     )
+
+    Write-Host "Architecture: x64"
 }
 
 
-Write-Host "Architecture:"
-Write-Host "  $ArchitectureName"
-
-
 # ============================================================
-# FIND LOCAL RUSTDESK INSTALLER
+# FIND RUSTDESK EXE
 # ============================================================
 
 $InstallerExe = $null
@@ -389,7 +320,7 @@ $InstallerExe = $null
 foreach ($pattern in $ExePatterns) {
 
     $candidate = Get-ChildItem `
-        -LiteralPath $ScriptDir `
+        -Path $ScriptDir `
         -Filter $pattern `
         -File `
         -ErrorAction SilentlyContinue |
@@ -398,49 +329,53 @@ foreach ($pattern in $ExePatterns) {
     if ($null -ne $candidate) {
 
         $InstallerExe = $candidate.FullName
-
         break
     }
 }
 
 
+# Fallback:
+# если рядом лежит только один EXE.
+
 if ($null -eq $InstallerExe) {
 
-    Write-Host ""
-    Write-Host "ERROR: RustDesk installer for architecture '$ArchitectureName' was not found." `
-        -ForegroundColor Red
+    $allExe = @(
+        Get-ChildItem `
+            -Path $ScriptDir `
+            -Filter "*.exe" `
+            -File `
+            -ErrorAction SilentlyContinue
+    )
+
+    if ($allExe.Count -eq 1) {
+
+        $InstallerExe = $allExe[0].FullName
+    }
+}
+
+
+if ([string]::IsNullOrWhiteSpace($InstallerExe)) {
 
     Write-Host ""
+    Write-Host "ERROR: RustDesk installer EXE was not found." -ForegroundColor Red
+    Write-Host ""
 
-    Write-Host "Expected one of:"
-
+    Write-Host "Expected files for architecture:"
     foreach ($pattern in $ExePatterns) {
-
         Write-Host "  $ScriptDir\$pattern"
     }
 
     Write-Host ""
-
     Write-Host "Available EXE files:"
 
-    $availableExe = Get-ChildItem `
-        -LiteralPath $ScriptDir `
+    Get-ChildItem `
+        -Path $ScriptDir `
         -Filter "*.exe" `
         -File `
-        -ErrorAction SilentlyContinue
-
-    if ($null -eq $availableExe) {
-
-        Write-Host "  No EXE files found."
-
-    }
-    else {
-
-        $availableExe |
-            ForEach-Object {
-                Write-Host "  $($_.Name)"
-            }
-    }
+        -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Write-Host "  $($_.Name)"
+        }
 
     exit 1
 }
@@ -458,11 +393,8 @@ Write-Host "  $InstallerExe"
 if (-not (Test-Path -LiteralPath $ConfigSource)) {
 
     Write-Host ""
-    Write-Host "ERROR: RustDesk2.toml not found:" `
-        -ForegroundColor Red
-
+    Write-Host "ERROR: RustDesk2.toml not found:" -ForegroundColor Red
     Write-Host $ConfigSource
-
     Write-Host ""
 
     exit 1
@@ -477,115 +409,42 @@ Write-Host ""
 Write-Host "Password:"
 
 if ($PasswordGenerated) {
-
     Write-Host "  $RustDeskPassword"
     Write-Host "  (randomly generated)"
-
 }
 else {
-
     Write-Host "  $RustDeskPassword"
     Write-Host "  (provided by user)"
-
 }
 
 Write-Host ""
 
 
 # ============================================================
-# 1. INSTALL / UPDATE RUSTDESK
+# 1. STOP EXISTING RUSTDESK
 # ============================================================
 
 Write-Host "============================================================"
-Write-Host "[1/8] INSTALLING RUSTDESK"
+Write-Host "[1/8] STOPPING EXISTING RUSTDESK"
 Write-Host "============================================================"
 Write-Host ""
-
-Write-Host "Running local RustDesk installer..."
-
-$installerProcess = Start-Process `
-    -FilePath $InstallerExe `
-    -ArgumentList "--silent-install" `
-    -Wait `
-    -PassThru
-
-
-Write-Host "Installer exit code:"
-Write-Host "  $($installerProcess.ExitCode)"
-
-
-if ($installerProcess.ExitCode -ne 0) {
-
-    Write-Host ""
-    Write-Host "ERROR: RustDesk installer failed." `
-        -ForegroundColor Red
-
-    exit $installerProcess.ExitCode
-}
 
 
 # ------------------------------------------------------------
-# Wait for installation
+# Stop service if exists
 # ------------------------------------------------------------
-
-Write-Host ""
-Write-Host "Waiting for RustDesk installation..."
-
-$installed = $false
-
-for ($i = 0; $i -lt 30; $i++) {
-
-    if (Test-Path -LiteralPath $RustDeskExe) {
-
-        $installed = $true
-
-        break
-    }
-
-    Start-Sleep -Seconds 1
-}
-
-
-if (-not $installed) {
-
-    Write-Host ""
-    Write-Host "ERROR: RustDesk.exe was not installed." `
-        -ForegroundColor Red
-
-    Write-Host $RustDeskExe
-
-    exit 1
-}
-
-
-Write-Host "RustDesk installation verified."
-
-
-# ============================================================
-# 2. STOP RUSTDESK SERVICE
-# ============================================================
-
-Write-Host ""
-Write-Host "============================================================"
-Write-Host "[2/8] STOPPING RUSTDESK SERVICE"
-Write-Host "============================================================"
-Write-Host ""
 
 $service = Get-Service `
     -Name $ServiceName `
     -ErrorAction SilentlyContinue
 
-
 if ($null -ne $service) {
 
-    Write-Host "Current status:"
-    Write-Host "  $($service.Status)"
-
+    Write-Host "Current service status: $($service.Status)"
 
     if ($service.Status -ne "Stopped") {
 
-        Write-Host ""
-        Write-Host "Stopping service..."
+        Write-Host "Stopping RustDesk service..."
 
         Stop-Service `
             -Name $ServiceName `
@@ -593,10 +452,9 @@ if ($null -ne $service) {
             -ErrorAction SilentlyContinue
     }
 
-
     for ($i = 0; $i -lt 20; $i++) {
 
-        Start-Sleep -Seconds 1
+        Start-Sleep -Milliseconds 500
 
         $service = Get-Service `
             -Name $ServiceName `
@@ -606,32 +464,11 @@ if ($null -ne $service) {
             $null -eq $service -or
             $service.Status -eq "Stopped"
         ) {
-
             break
         }
     }
 
-
-    $service = Get-Service `
-        -Name $ServiceName `
-        -ErrorAction SilentlyContinue
-
-
-    if (
-        $null -ne $service -and
-        $service.Status -ne "Stopped"
-    ) {
-
-        Write-Host ""
-        Write-Host "ERROR: RustDesk service could not be stopped." `
-            -ForegroundColor Red
-
-        exit 1
-    }
-
-
     Write-Host "RustDesk service stopped."
-
 }
 else {
 
@@ -639,16 +476,9 @@ else {
 }
 
 
-# ============================================================
-# 3. STOP RUSTDESK GUI
-# ============================================================
-
-Write-Host ""
-Write-Host "============================================================"
-Write-Host "[3/8] STOPPING RUSTDESK GUI"
-Write-Host "============================================================"
-Write-Host ""
-
+# ------------------------------------------------------------
+# Stop GUI
+# ------------------------------------------------------------
 
 Get-Process `
     -Name "RustDesk" `
@@ -656,7 +486,6 @@ Get-Process `
     Stop-Process `
         -Force `
         -ErrorAction SilentlyContinue
-
 
 Start-Sleep -Seconds 2
 
@@ -668,11 +497,10 @@ for ($i = 0; $i -lt 15; $i++) {
         -ErrorAction SilentlyContinue
 
     if ($null -eq $process) {
-
         break
     }
 
-    Start-Sleep -Seconds 1
+    Start-Sleep -Milliseconds 500
 }
 
 
@@ -680,27 +508,197 @@ $process = Get-Process `
     -Name "RustDesk" `
     -ErrorAction SilentlyContinue
 
-
 if ($null -ne $process) {
 
     Write-Host ""
-    Write-Host "ERROR: RustDesk GUI process is still running." `
-        -ForegroundColor Red
+    Write-Host "ERROR: RustDesk GUI could not be stopped." -ForegroundColor Red
+    Write-Host ""
 
     exit 1
 }
-
 
 Write-Host "RustDesk GUI stopped."
 
 
 # ============================================================
-# 4. INSTALL RustDesk2.toml
+# 2. INSTALL RUSTDESK FROM LOCAL EXE
 # ============================================================
 
 Write-Host ""
 Write-Host "============================================================"
-Write-Host "[4/8] INSTALLING RUSTDESK2.TOML"
+Write-Host "[2/8] INSTALLING RUSTDESK FROM LOCAL EXE"
+Write-Host "============================================================"
+Write-Host ""
+
+Write-Host "Installer:"
+Write-Host "  $InstallerExe"
+
+Write-Host ""
+Write-Host "Starting silent RustDesk installation..."
+
+
+# ------------------------------------------------------------
+# Start installer and WAIT for it.
+#
+# Это важный момент:
+# раньше Start-Process запускался без -Wait, после чего
+# скрипт мог перейти дальше до окончания установки.
+# ------------------------------------------------------------
+
+$installerProcess = Start-Process `
+    -FilePath $InstallerExe `
+    -ArgumentList "--silent-install" `
+    -Wait `
+    -PassThru `
+    -WindowStyle Hidden
+
+
+Write-Host ""
+Write-Host "Installer exit code:"
+Write-Host "  $($installerProcess.ExitCode)"
+
+
+# ------------------------------------------------------------
+# Installer иногда возвращает код, отличный от 0,
+# даже если установка успешно завершена.
+# Поэтому главным критерием является наличие RustDesk.exe.
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "Waiting for RustDesk installation to become available..."
+
+
+$installed = $false
+
+for ($i = 0; $i -lt 30; $i++) {
+
+    if (Test-Path -LiteralPath $RustDeskExe) {
+
+        $installed = $true
+        break
+    }
+
+    Start-Sleep -Seconds 1
+}
+
+
+if (-not $installed) {
+
+    Write-Host ""
+    Write-Host "ERROR: RustDesk.exe was not installed." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Expected:"
+    Write-Host "  $RustDeskExe"
+
+    exit 1
+}
+
+
+Write-Host "RustDesk.exe installed."
+
+
+# ============================================================
+# 3. VERIFY INSTALLATION
+# ============================================================
+
+Write-Host ""
+Write-Host "============================================================"
+Write-Host "[3/8] VERIFYING RUSTDESK INSTALLATION"
+Write-Host "============================================================"
+Write-Host ""
+
+
+if (-not (Test-Path -LiteralPath $RustDeskExe)) {
+
+    Write-Host ""
+    Write-Host "ERROR: RustDesk.exe not found." -ForegroundColor Red
+    Write-Host $RustDeskExe
+    Write-Host ""
+
+    exit 1
+}
+
+
+Write-Host "RustDesk executable verified:"
+Write-Host "  $RustDeskExe"
+
+
+# ============================================================
+# 4. INSTALL / VERIFY SERVICE
+# ============================================================
+
+Write-Host ""
+Write-Host "============================================================"
+Write-Host "[4/8] INSTALLING / VERIFYING RUSTDESK SERVICE"
+Write-Host "============================================================"
+Write-Host ""
+
+
+$service = Get-Service `
+    -Name $ServiceName `
+    -ErrorAction SilentlyContinue
+
+
+if ($null -eq $service) {
+
+    Write-Host "RustDesk service does not exist."
+    Write-Host "Installing service..."
+
+    $serviceInstall = Start-Process `
+        -FilePath $RustDeskExe `
+        -ArgumentList "--install-service" `
+        -Wait `
+        -PassThru `
+        -WindowStyle Hidden
+
+    Write-Host ""
+    Write-Host "Service installer exit code:"
+    Write-Host "  $($serviceInstall.ExitCode)"
+
+    Start-Sleep -Seconds 3
+}
+
+
+# ------------------------------------------------------------
+# Wait for service registration
+# ------------------------------------------------------------
+
+$service = $null
+
+for ($i = 0; $i -lt 20; $i++) {
+
+    $service = Get-Service `
+        -Name $ServiceName `
+        -ErrorAction SilentlyContinue
+
+    if ($null -ne $service) {
+        break
+    }
+
+    Start-Sleep -Seconds 1
+}
+
+
+if ($null -eq $service) {
+
+    Write-Host ""
+    Write-Host "ERROR: RustDesk service was not created." -ForegroundColor Red
+    Write-Host ""
+
+    exit 1
+}
+
+
+Write-Host "RustDesk service exists."
+
+
+# ============================================================
+# 5. INSTALL CONFIGURATION
+# ============================================================
+
+Write-Host ""
+Write-Host "============================================================"
+Write-Host "[5/8] INSTALLING RUSTDESK2.TOML"
 Write-Host "============================================================"
 Write-Host ""
 
@@ -770,7 +768,7 @@ if (Test-Path -LiteralPath $SystemConfig) {
 
 
 # ------------------------------------------------------------
-# COPY USER CONFIG
+# USER CONFIG
 # ------------------------------------------------------------
 
 Copy-Item `
@@ -785,7 +783,7 @@ Write-Host "  $UserConfig"
 
 
 # ------------------------------------------------------------
-# COPY SYSTEM CONFIG
+# SYSTEM CONFIG
 # ------------------------------------------------------------
 
 Copy-Item `
@@ -806,8 +804,7 @@ Write-Host "  $SystemConfig"
 if (-not (Test-Path -LiteralPath $UserConfig)) {
 
     Write-Host ""
-    Write-Host "ERROR: User RustDesk2.toml was not installed." `
-        -ForegroundColor Red
+    Write-Host "ERROR: User RustDesk2.toml was not installed." -ForegroundColor Red
 
     exit 1
 }
@@ -816,8 +813,7 @@ if (-not (Test-Path -LiteralPath $UserConfig)) {
 if (-not (Test-Path -LiteralPath $SystemConfig)) {
 
     Write-Host ""
-    Write-Host "ERROR: System RustDesk2.toml was not installed." `
-        -ForegroundColor Red
+    Write-Host "ERROR: System RustDesk2.toml was not installed." -ForegroundColor Red
 
     exit 1
 }
@@ -828,112 +824,158 @@ Write-Host "RustDesk2.toml installed successfully."
 
 
 # ============================================================
-# 5. START RUSTDESK GUI
+# 6. START GUI AS REAL USER
 # ============================================================
 
 Write-Host ""
 Write-Host "============================================================"
-Write-Host "[5/8] STARTING RUSTDESK GUI"
+Write-Host "[6/8] STARTING RUSTDESK GUI"
 Write-Host "============================================================"
 Write-Host ""
 
+Write-Host "Starting RustDesk as:"
+Write-Host "  $RealUserName"
 
-Write-Host "Starting RustDesk..."
 
 # ------------------------------------------------------------
-# Important:
+# Для elevated PowerShell обычный Start-Process запускает
+# приложение с elevated token.
 #
-# Script is elevated, but RustDesk GUI should belong to the
-# original interactive user.
+# Нам нужен GUI именно в интерактивной сессии пользователя.
 #
-# explorer.exe is used to launch the application through the
-# user's normal desktop shell instead of directly creating an
-# elevated child process.
+# Используем временную Scheduled Task:
+# она запускает RustDesk в пользовательской сессии.
 # ------------------------------------------------------------
 
-$explorer = Get-Process `
-    -Name "explorer" `
-    -ErrorAction SilentlyContinue |
-    Select-Object -First 1
+$TaskName = "RustDesk-Temporary-Launch-$([Guid]::NewGuid().ToString('N'))"
+
+$taskAction = New-ScheduledTaskAction `
+    -Execute $RustDeskExe
+
+$taskPrincipal = New-ScheduledTaskPrincipal `
+    -UserId $RealUserName `
+    -LogonType Interactive `
+    -RunLevel Limited
+
+$taskSettings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries
 
 
-if ($null -eq $explorer) {
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -Action $taskAction `
+    -Principal $taskPrincipal `
+    -Settings $taskSettings `
+    -Force |
+    Out-Null
 
-    Write-Host ""
-    Write-Host "ERROR: explorer.exe was not found." `
-        -ForegroundColor Red
 
-    exit 1
+try {
+
+    Start-ScheduledTask `
+        -TaskName $TaskName
+
+}
+finally {
+
+    # Удаляем задачу позже.
+    # Сам RustDesk уже будет работать в пользовательской сессии.
 }
 
 
-Start-Process `
-    -FilePath "$env:WINDIR\explorer.exe" `
-    -ArgumentList "`"$RustDeskExe`""
+Write-Host "Waiting for RustDesk GUI..."
 
 
-Write-Host "Waiting for RustDesk process..."
-
-$rustDeskRunning = $false
-
+$guiRunning = $false
 
 for ($i = 0; $i -lt 20; $i++) {
 
-    $rustDeskProcess = Get-Process `
+    Start-Sleep -Seconds 1
+
+    # Ищем процесс RustDesk именно в пользовательской session.
+    $processes = Get-Process `
         -Name "RustDesk" `
         -ErrorAction SilentlyContinue
 
+    foreach ($p in $processes) {
 
-    if ($null -ne $rustDeskProcess) {
+        try {
 
-        $rustDeskRunning = $true
+            $owner = (Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)" |
+                Invoke-CimMethod -MethodName GetOwner `
+                -ErrorAction SilentlyContinue)
 
-        break
+            if (
+                $null -ne $owner -and
+                $owner.User -eq $RealUserName
+            ) {
+
+                $guiRunning = $true
+                break
+            }
+
+        }
+        catch {
+            continue
+        }
     }
 
-
-    Start-Sleep -Seconds 1
+    if ($guiRunning) {
+        break
+    }
 }
 
 
-if (-not $rustDeskRunning) {
+# ------------------------------------------------------------
+# Удаляем временную task.
+# ------------------------------------------------------------
+
+Unregister-ScheduledTask `
+    -TaskName $TaskName `
+    -Confirm:$false `
+    -ErrorAction SilentlyContinue
+
+
+if (-not $guiRunning) {
 
     Write-Host ""
-    Write-Host "ERROR: RustDesk process did not start." `
-        -ForegroundColor Red
+    Write-Host "ERROR: RustDesk GUI did not start for user $RealUserName." -ForegroundColor Red
+    Write-Host ""
 
     exit 1
 }
 
 
-Write-Host "RustDesk process is running."
+Write-Host "RustDesk GUI is running."
 
 
-# ------------------------------------------------------------
-# REQUIRED INITIALIZATION DELAY
-# ------------------------------------------------------------
+# ============================================================
+# 7. WAIT + APPLY PASSWORD + VERIFY
+# ============================================================
 
 Write-Host ""
+Write-Host "============================================================"
+Write-Host "[7/8] APPLYING PASSWORD"
+Write-Host "============================================================"
+Write-Host ""
+
 Write-Host "Waiting 5 seconds for RustDesk initialization..."
 
 Start-Sleep -Seconds 5
 
 
-# ============================================================
-# 6. APPLY PASSWORD
-# ============================================================
-
 Write-Host ""
-Write-Host "============================================================"
-Write-Host "[6/8] APPLYING RUSTDESK PASSWORD"
-Write-Host "============================================================"
-Write-Host ""
-
-
 Write-Host "Executing:"
 Write-Host "  RustDesk.exe --password ********"
 Write-Host ""
 
+
+# ------------------------------------------------------------
+# Password command выполняем elevated.
+#
+# GUI уже запущен в правильной пользовательской сессии.
+# ------------------------------------------------------------
 
 $passwordProcess = Start-Process `
     -FilePath $RustDeskExe `
@@ -953,8 +995,8 @@ Write-Host "  $($passwordProcess.ExitCode)"
 if ($passwordProcess.ExitCode -ne 0) {
 
     Write-Host ""
-    Write-Host "ERROR: RustDesk --password failed." `
-        -ForegroundColor Red
+    Write-Host "ERROR: RustDesk --password failed." -ForegroundColor Red
+    Write-Host ""
 
     exit 1
 }
@@ -964,35 +1006,30 @@ Write-Host ""
 Write-Host "Password applied successfully."
 
 
-# ============================================================
-# 7. VERIFY RustDesk.toml
-# ============================================================
+# ------------------------------------------------------------
+# WAIT FOR USER RustDesk.toml
+# ------------------------------------------------------------
 
 Write-Host ""
-Write-Host "============================================================"
-Write-Host "[7/8] VERIFYING RUSTDESK.TOML"
-Write-Host "============================================================"
-Write-Host ""
+Write-Host "Checking User RustDesk.toml..."
 
-
-# ------------------------------------------------------------
-# USER RustDesk.toml
-# ------------------------------------------------------------
 
 $UserPasswordConfigFound = $false
-
 
 for ($i = 0; $i -lt 15; $i++) {
 
     if (Test-Path -LiteralPath $UserPasswordConfig) {
 
-        $passwordConfigFile = Get-Item `
-            -LiteralPath $UserPasswordConfig
+        $file = Get-Item `
+            -LiteralPath $UserPasswordConfig `
+            -ErrorAction SilentlyContinue
 
-        if ($passwordConfigFile.Length -gt 0) {
+        if (
+            $null -ne $file -and
+            $file.Length -gt 0
+        ) {
 
             $UserPasswordConfigFound = $true
-
             break
         }
     }
@@ -1001,13 +1038,16 @@ for ($i = 0; $i -lt 15; $i++) {
 }
 
 
+# ------------------------------------------------------------
+# USER RustDesk.toml
+# ------------------------------------------------------------
+
 if (-not $UserPasswordConfigFound) {
 
     Write-Host ""
-    Write-Host "ERROR: User RustDesk.toml was not created or is empty." `
-        -ForegroundColor Red
-
+    Write-Host "ERROR: User RustDesk.toml was not created or is empty." -ForegroundColor Red
     Write-Host ""
+
     Write-Host "Expected:"
     Write-Host "  $UserPasswordConfig"
 
@@ -1015,35 +1055,42 @@ if (-not $UserPasswordConfigFound) {
 }
 
 
-$passwordConfigFile = Get-Item `
+$userPasswordFile = Get-Item `
     -LiteralPath $UserPasswordConfig
 
 
+Write-Host ""
 Write-Host "User RustDesk.toml verified:"
 Write-Host "  $UserPasswordConfig"
 
 Write-Host "Size:"
-Write-Host "  $($passwordConfigFile.Length) bytes"
+Write-Host "  $($userPasswordFile.Length) bytes"
 
 
 # ------------------------------------------------------------
 # SYSTEM RustDesk.toml
 # ------------------------------------------------------------
 
-$SystemPasswordConfigFound = $false
+Write-Host ""
+Write-Host "Checking System RustDesk.toml..."
 
+
+$SystemPasswordConfigFound = $false
 
 for ($i = 0; $i -lt 15; $i++) {
 
     if (Test-Path -LiteralPath $SystemPasswordConfig) {
 
-        $systemPasswordConfigFile = Get-Item `
-            -LiteralPath $SystemPasswordConfig
+        $file = Get-Item `
+            -LiteralPath $SystemPasswordConfig `
+            -ErrorAction SilentlyContinue
 
-        if ($systemPasswordConfigFile.Length -gt 0) {
+        if (
+            $null -ne $file -and
+            $file.Length -gt 0
+        ) {
 
             $SystemPasswordConfigFound = $true
-
             break
         }
     }
@@ -1052,38 +1099,27 @@ for ($i = 0; $i -lt 15; $i++) {
 }
 
 
-if (-not $SystemPasswordConfigFound) {
+if ($SystemPasswordConfigFound) {
+
+    $systemPasswordFile = Get-Item `
+        -LiteralPath $SystemPasswordConfig
 
     Write-Host ""
-    Write-Host "ERROR: System RustDesk.toml was not created or is empty." `
-        -ForegroundColor Red
-
-    Write-Host ""
-    Write-Host "Expected:"
+    Write-Host "System RustDesk.toml verified:"
     Write-Host "  $SystemPasswordConfig"
 
-    exit 1
+    Write-Host "Size:"
+    Write-Host "  $($systemPasswordFile.Length) bytes"
+}
+else {
+
+    Write-Host ""
+    Write-Host "WARNING: System RustDesk.toml was not found." -ForegroundColor Yellow
 }
 
 
-$systemPasswordConfigFile = Get-Item `
-    -LiteralPath $SystemPasswordConfig
-
-
-Write-Host ""
-Write-Host "System RustDesk.toml verified:"
-Write-Host "  $SystemPasswordConfig"
-
-Write-Host "Size:"
-Write-Host "  $($systemPasswordConfigFile.Length) bytes"
-
-
-Write-Host ""
-Write-Host "RustDesk password configuration verified."
-
-
 # ============================================================
-# 8. START RUSTDESK SERVICE
+# 8. START SERVICE
 # ============================================================
 
 Write-Host ""
@@ -1098,56 +1134,18 @@ $service = Get-Service `
     -ErrorAction SilentlyContinue
 
 
-# ------------------------------------------------------------
-# If silent installer did not create service, install it
-# ------------------------------------------------------------
-
-if ($null -eq $service) {
-
-    Write-Host "RustDesk service does not exist."
-    Write-Host "Installing RustDesk service..."
-
-    $serviceProcess = Start-Process `
-        -FilePath $RustDeskExe `
-        -ArgumentList "--install-service" `
-        -Wait `
-        -PassThru `
-        -WindowStyle Hidden
-
-
-    Write-Host "Service installer exit code:"
-    Write-Host "  $($serviceProcess.ExitCode)"
-
-
-    Start-Sleep -Seconds 3
-
-
-    $service = Get-Service `
-        -Name $ServiceName `
-        -ErrorAction SilentlyContinue
-}
-
-
 if ($null -eq $service) {
 
     Write-Host ""
-    Write-Host "ERROR: RustDesk service does not exist." `
-        -ForegroundColor Red
+    Write-Host "ERROR: RustDesk service does not exist." -ForegroundColor Red
+    Write-Host ""
 
     exit 1
 }
 
 
-Write-Host "Service found."
-
-
-# ------------------------------------------------------------
-# START SERVICE
-# ------------------------------------------------------------
-
 if ($service.Status -ne "Running") {
 
-    Write-Host ""
     Write-Host "Starting RustDesk service..."
 
     Start-Service `
@@ -1155,22 +1153,15 @@ if ($service.Status -ne "Running") {
 }
 
 
-# ------------------------------------------------------------
-# WAIT FOR SERVICE
-# ------------------------------------------------------------
-
 $running = $false
-
 
 for ($i = 0; $i -lt 20; $i++) {
 
     Start-Sleep -Seconds 1
 
-
     $service = Get-Service `
         -Name $ServiceName `
         -ErrorAction SilentlyContinue
-
 
     if (
         $null -ne $service -and
@@ -1178,7 +1169,6 @@ for ($i = 0; $i -lt 20; $i++) {
     ) {
 
         $running = $true
-
         break
     }
 }
@@ -1187,8 +1177,8 @@ for ($i = 0; $i -lt 20; $i++) {
 if (-not $running) {
 
     Write-Host ""
-    Write-Host "ERROR: RustDesk service failed to start." `
-        -ForegroundColor Red
+    Write-Host "ERROR: RustDesk service failed to start." -ForegroundColor Red
+    Write-Host ""
 
     Get-Service `
         -Name $ServiceName |
@@ -1198,7 +1188,6 @@ if (-not $running) {
 }
 
 
-Write-Host ""
 Write-Host "RustDesk service is RUNNING."
 
 
@@ -1206,29 +1195,34 @@ Write-Host "RustDesk service is RUNNING."
 # FINAL GUI CHECK
 # ============================================================
 
-Write-Host ""
-Write-Host "============================================================"
-Write-Host "                         FINAL CHECK"
-Write-Host "============================================================"
-Write-Host ""
+$finalGui = $false
 
-
-$guiProcess = Get-Process `
+$processes = Get-Process `
     -Name "RustDesk" `
     -ErrorAction SilentlyContinue
 
 
-if ($null -ne $guiProcess) {
+foreach ($p in $processes) {
 
-    Write-Host "RustDesk GUI:"
-    Write-Host "  RUNNING"
+    try {
 
-}
-else {
+        $owner = (Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)" |
+            Invoke-CimMethod -MethodName GetOwner `
+            -ErrorAction SilentlyContinue)
 
-    Write-Host "RustDesk GUI:"
-    Write-Host "  WARNING: process was not detected" `
-        -ForegroundColor Yellow
+        if (
+            $null -ne $owner -and
+            $owner.User -eq $RealUserName
+        ) {
+
+            $finalGui = $true
+            break
+        }
+
+    }
+    catch {
+        continue
+    }
 }
 
 
@@ -1242,24 +1236,20 @@ Write-Host "                         DONE"
 Write-Host "============================================================"
 Write-Host ""
 
-Write-Host "Architecture:"
-Write-Host "  $ArchitectureName"
+Write-Host "RustDesk:"
+Write-Host "  $RustDeskExe"
 
 Write-Host ""
 Write-Host "Installer:"
 Write-Host "  $InstallerExe"
 
 Write-Host ""
-Write-Host "RustDesk:"
-Write-Host "  $RustDeskExe"
+Write-Host "Architecture:"
+Write-Host "  $Architecture"
 
 Write-Host ""
-Write-Host "User:"
-Write-Host "  $OriginalUser"
-
-Write-Host ""
-Write-Host "User APPDATA:"
-Write-Host "  $OriginalAppData"
+Write-Host "Real user:"
+Write-Host "  $RealUserName"
 
 Write-Host ""
 Write-Host "User RustDesk2.toml:"
@@ -1284,27 +1274,31 @@ Get-Service `
     -Name $ServiceName |
     Format-List Name,Status,StartType
 
+Write-Host ""
+Write-Host "GUI user:"
+Write-Host "  $RealUserName"
+
+if ($finalGui) {
+
+    Write-Host "GUI:"
+    Write-Host "  RUNNING"
+}
+else {
+
+    Write-Host "GUI:"
+    Write-Host "  WARNING: NOT DETECTED" -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "Password:"
 Write-Host "  $RustDeskPassword"
 
-
 if ($PasswordGenerated) {
-
     Write-Host "  (randomly generated)"
-
 }
 else {
-
     Write-Host "  (provided by user)"
-
 }
-
-
-Write-Host ""
-Write-Host "GUI:"
-Write-Host "  RUNNING"
 
 Write-Host ""
 Write-Host "============================================================"
