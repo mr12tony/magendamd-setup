@@ -26,12 +26,6 @@ $InstallDir = Join-Path $env:ProgramFiles "RustDesk"
 
 $RustDeskExe = Join-Path $InstallDir "RustDesk.exe"
 
-$ProgramDataRustDesk = Join-Path $env:ProgramData "RustDesk"
-
-$ConfigDir = Join-Path $ProgramDataRustDesk "config"
-
-$ConfigFile = Join-Path $ConfigDir "RustDesk2.toml"
-
 $InstallLog = Join-Path $env:TEMP "rustdesk-install.log"
 
 # ==========================================================
@@ -43,170 +37,116 @@ function Log {
         [string]$Message
     )
 
-    $Line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
 
-    Write-Host $Line
+    Write-Host $line
 
     try {
-        Add-Content -Path $InstallLog -Value $Line -ErrorAction SilentlyContinue
+        Add-Content -LiteralPath $InstallLog -Value $line -ErrorAction SilentlyContinue
     }
     catch {
     }
 }
 
-function Fail {
+function Section {
     param(
-        [string]$Message
+        [string]$Name
     )
 
-    Log "ERROR: $Message"
-
-    Write-Host ""
-    Write-Host "========================================"
-    Write-Host "INSTALLATION FAILED"
-    Write-Host "========================================"
-    Write-Host ""
-    Write-Host $Message
-    Write-Host ""
-    Write-Host "Log:"
-    Write-Host $InstallLog
-    Write-Host ""
-
-    exit 1
+    Log ""
+    Log "========"
+    Log "[$Name]"
+    Log "========"
 }
 
 # ==========================================================
-# TEST ADMIN
+# ADMIN CHECK
 # ==========================================================
 
-function Test-IsAdministrator {
+function Test-Administrator {
 
-    $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 
-    $Principal = New-Object Security.Principal.WindowsPrincipal($Identity)
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 
-    return $Principal.IsInRole(
+    return $principal.IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator
     )
 }
 
 # ==========================================================
-# UAC ELEVATION
+# UAC
 # ==========================================================
 
-if (-not (Test-IsAdministrator)) {
+if (-not (Test-Administrator)) {
 
-    Write-Host "Administrator privileges are required."
-    Write-Host "Requesting UAC..."
+    Section "UAC"
+
+    Log "Administrator privileges are required."
+    Log "Requesting UAC..."
 
     try {
 
-        # Pass the password as a Base64 UTF8 string.
-        # This avoids quoting problems with passwords containing
-        # spaces, $, !, &, quotes, etc.
+        $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 
-        $PasswordBytes = [System.Text.Encoding]::UTF8.GetBytes($Password)
+        $escapedScript = $PSCommandPath.Replace('"', '""')
+        $escapedPassword = $Password.Replace('"', '""')
 
-        $EncodedPassword = [Convert]::ToBase64String(
-            $PasswordBytes
-        )
+        $argumentString =
+            "-NoProfile " +
+            "-ExecutionPolicy Bypass " +
+            "-File `"$escapedScript`" " +
+            "-Password `"$escapedPassword`""
 
-        $Arguments = @(
-            "-NoProfile"
-            "-ExecutionPolicy"
-            "Bypass"
-            "-File"
-            "`"$PSCommandPath`""
-            "-PasswordBase64"
-            "`"$EncodedPassword`""
-        )
+        Log "Starting elevated PowerShell..."
 
-        # Re-launch ourselves elevated.
-
-        $Process = Start-Process `
-            -FilePath "powershell.exe" `
-            -ArgumentList $Arguments `
+        $process = Start-Process `
+            -FilePath $psExe `
+            -ArgumentList $argumentString `
             -Verb RunAs `
             -Wait `
             -PassThru
 
-        Write-Host "Elevated PowerShell finished."
-        Write-Host "Exit code: $($Process.ExitCode)"
+        Log "Elevated PowerShell finished."
+        Log "Exit code: $($process.ExitCode)"
 
-        exit $Process.ExitCode
+        if ($process.ExitCode -ne 0) {
+            Log "ERROR: elevated installation failed."
+            exit $process.ExitCode
+        }
+
+        Log "Installation completed successfully."
+
+        exit 0
     }
     catch {
 
-        Write-Host ""
-        Write-Host "ERROR: UAC elevation failed."
-        Write-Host $_.Exception.Message
+        Log "ERROR: UAC elevation failed."
+        Log $_.Exception.Message
 
         exit 1
     }
 }
 
 # ==========================================================
-# PASSWORD BASE64 SUPPORT
+# START
 # ==========================================================
 
-# The elevated process may receive -PasswordBase64.
-#
-# Because param() above requires Password, we handle the
-# command line manually if the Base64 form was supplied.
+Section "START"
 
-$RawCommandLine = [Environment]::CommandLine
-
-if ($RawCommandLine -match '-PasswordBase64\s+"([^"]+)"') {
-
-    try {
-
-        $EncodedPassword = $Matches[1]
-
-        $PasswordBytes = [Convert]::FromBase64String(
-            $EncodedPassword
-        )
-
-        $Password = [System.Text.Encoding]::UTF8.GetString(
-            $PasswordBytes
-        )
-    }
-    catch {
-
-        Fail "Unable to decode elevated password."
-    }
-}
-
-if ([string]::IsNullOrWhiteSpace($Password)) {
-
-    Fail "RustDesk password is empty."
-}
-
-# ==========================================================
-# ADMIN PHASE
-# ==========================================================
-
-Log "========================================"
 Log "RustDesk Windows installer"
-Log "========================================"
-
 Log "Running as administrator: YES"
 
-# ==========================================================
-# USER
-# ==========================================================
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 
-$WindowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
-
-$WindowsUser = $WindowsIdentity.Name
-
-$UserProfile = $env:USERPROFILE
-
-Log "Windows identity: $WindowsUser"
-Log "User profile: $UserProfile"
+Log "Windows identity: $($identity.Name)"
+Log "Script directory: $ScriptDir"
 
 # ==========================================================
 # ARCHITECTURE
 # ==========================================================
+
+Section "ARCHITECTURE"
 
 $Architecture = $env:PROCESSOR_ARCHITECTURE
 
@@ -217,85 +157,87 @@ if ($env:PROCESSOR_ARCHITEW6432) {
 switch ($Architecture.ToUpperInvariant()) {
 
     "AMD64" {
-
-        $BundledExe = Join-Path `
-            $ScriptDir `
-            "rustdesk-x86_64.exe"
+        $BundledExe = Join-Path $ScriptDir "rustdesk-x86_64.exe"
     }
 
     "ARM64" {
-
-        $BundledExe = Join-Path `
-            $ScriptDir `
-            "rustdesk-aarch64.exe"
+        $BundledExe = Join-Path $ScriptDir "rustdesk-aarch64.exe"
     }
 
     default {
-
-        Fail "Unsupported Windows architecture: $Architecture"
+        Log "ERROR: unsupported architecture: $Architecture"
+        exit 1
     }
 }
 
 Log "Architecture: $Architecture"
-
 Log "RustDesk binary: $BundledExe"
+Log "Install directory: $InstallDir"
+Log "RustDesk executable: $RustDeskExe"
 
-if (-not (Test-Path $BundledExe)) {
+if (-not (Test-Path -LiteralPath $BundledExe -PathType Leaf)) {
 
-    Fail "RustDesk binary not found: $BundledExe"
+    Log "ERROR: RustDesk binary not found:"
+    Log $BundledExe
+
+    exit 1
 }
 
 # ==========================================================
-# CONFIG PATH
+# STOP RUSTDESK
 # ==========================================================
 
-Log "Config directory: $ConfigDir"
-Log "Config file: $ConfigFile"
+Section "STOP RUSTDESK"
 
-# ==========================================================
-# STOP RUSTDESK PROCESS
-# ==========================================================
+Log "Stopping RustDesk processes..."
 
-Log "Stopping RustDesk..."
+Get-Process -Name "RustDesk" -ErrorAction SilentlyContinue |
+    ForEach-Object {
 
-Get-Process `
-    -Name "RustDesk" `
-    -ErrorAction SilentlyContinue |
-    Stop-Process `
-        -Force `
-        -ErrorAction SilentlyContinue
+        Log "Stopping PID $($_.Id)"
+
+        Stop-Process `
+            -Id $_.Id `
+            -Force `
+            -ErrorAction SilentlyContinue
+    }
 
 Start-Sleep -Seconds 2
 
 # ==========================================================
-# STOP EXISTING SERVICES
+# STOP OLD SERVICES
 # ==========================================================
 
 Log "Stopping RustDesk services..."
 
 $ServiceNames = @(
     "RustDesk",
-    "RustDeskService"
+    "RustDeskService",
+    "RustDesk Service"
 )
 
-foreach ($ServiceName in $ServiceNames) {
+foreach ($serviceName in $ServiceNames) {
 
-    $Service = Get-Service `
-        -Name $ServiceName `
+    $service = Get-Service `
+        -Name $serviceName `
         -ErrorAction SilentlyContinue
 
-    if ($null -ne $Service) {
+    if ($null -ne $service) {
 
-        Log "Stopping service: $ServiceName"
+        Log "Found service: $serviceName"
+        Log "Current status: $($service.Status)"
 
-        try {
+        if ($service.Status -ne "Stopped") {
 
-            Stop-Service `
-                -Name $ServiceName `
-                -Force `
-                -ErrorAction SilentlyContinue
-        }
-        catch {
+            try {
+                Stop-Service `
+                    -Name $serviceName `
+                    -Force `
+                    -ErrorAction SilentlyContinue
+            }
+            catch {
+                Log "WARNING: could not stop $serviceName"
+            }
         }
     }
 }
@@ -306,63 +248,47 @@ Start-Sleep -Seconds 2
 # REMOVE OLD SERVICES
 # ==========================================================
 
-Log "Removing old RustDesk services..."
+Section "REMOVE OLD SERVICE"
 
-foreach ($ServiceName in $ServiceNames) {
+foreach ($serviceName in $ServiceNames) {
 
-    try {
+    $service = Get-Service `
+        -Name $serviceName `
+        -ErrorAction SilentlyContinue
 
-        & sc.exe delete $ServiceName *> $null
+    if ($null -ne $service) {
 
-    }
-    catch {
+        Log "Removing service: $serviceName"
+
+        & sc.exe delete $serviceName 2>&1 |
+            ForEach-Object {
+                Log "$_"
+            }
     }
 }
 
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 3
 
 # ==========================================================
 # REMOVE OLD INSTALLATION
 # ==========================================================
 
-Log "Removing old RustDesk installation..."
+Section "INSTALL APPLICATION"
 
-if (Test-Path $InstallDir) {
+if (Test-Path -LiteralPath $InstallDir) {
 
-    try {
-
-        Remove-Item `
-            -Path $InstallDir `
-            -Recurse `
-            -Force `
-            -ErrorAction Stop
-    }
-    catch {
-
-        Fail "Unable to remove old RustDesk installation: $($_.Exception.Message)"
-    }
-}
-
-# ==========================================================
-# REMOVE OLD PROGRAMDATA CONFIG
-# ==========================================================
-
-Log "Removing old RustDesk configuration..."
-
-if (Test-Path $ProgramDataRustDesk) {
+    Log "Removing old installation..."
 
     Remove-Item `
-        -Path $ProgramDataRustDesk `
+        -LiteralPath $InstallDir `
         -Recurse `
         -Force `
         -ErrorAction SilentlyContinue
+
+    Start-Sleep -Seconds 1
 }
 
-# ==========================================================
-# CREATE INSTALL DIRECTORY
-# ==========================================================
-
-Log "Creating RustDesk installation directory..."
+Log "Creating installation directory..."
 
 New-Item `
     -ItemType Directory `
@@ -370,48 +296,54 @@ New-Item `
     -Force |
     Out-Null
 
-# ==========================================================
-# INSTALL EXE
-# ==========================================================
-
-Log "Installing RustDesk.exe..."
+Log "Copying RustDesk..."
 
 Copy-Item `
-    -Path $BundledExe `
+    -LiteralPath $BundledExe `
     -Destination $RustDeskExe `
     -Force
 
-if (-not (Test-Path $RustDeskExe)) {
+if (-not (Test-Path -LiteralPath $RustDeskExe -PathType Leaf)) {
 
-    Fail "RustDesk.exe was not installed."
+    Log "ERROR: RustDesk executable was not installed."
+
+    exit 1
 }
 
 Log "RustDesk executable installed."
 
 # ==========================================================
-# CREATE CONFIG DIRECTORY
+# CONFIG
 # ==========================================================
 
-Log "Creating RustDesk configuration directory..."
+Section "CONFIG"
+
+# IMPORTANT:
+#
+# Windows service uses LocalSystem/LocalService context.
+#
+# Therefore configuration for the service is placed in:
+#
+# C:\ProgramData\RustDesk\config
+#
+# ==========================================================
+
+$ServiceConfigDir = Join-Path $env:ProgramData "RustDesk\config"
+
+$ServiceConfigFile = Join-Path $ServiceConfigDir "RustDesk2.toml"
+
+Log "Creating service configuration directory..."
 
 New-Item `
     -ItemType Directory `
-    -Path $ConfigDir `
+    -Path $ServiceConfigDir `
     -Force |
     Out-Null
 
-# ==========================================================
-# CONFIGURATION
-# ==========================================================
-
-Log "========================================"
-Log "[CONFIG]"
-Log "========================================"
-
-Log "Applying RustDesk configuration..."
+Log "Writing RustDesk2.toml..."
 
 $ConfigContent = @"
-rendezvous_server = '$RendezvousServer:21116'
+rendezvous_server = '$RendezvousServer`:21116'
 nat_type = 1
 serial = 0
 unlock_pin = ''
@@ -424,98 +356,124 @@ key = '$RustDeskKey'
 "@
 
 Set-Content `
-    -Path $ConfigFile `
+    -LiteralPath $ServiceConfigFile `
     -Value $ConfigContent `
     -Encoding UTF8
 
-if (-not (Test-Path $ConfigFile)) {
+if (-not (Test-Path -LiteralPath $ServiceConfigFile -PathType Leaf)) {
 
-    Fail "RustDesk2.toml was not created."
+    Log "ERROR: failed to create RustDesk2.toml."
+
+    exit 1
 }
 
-Log "RustDesk2.toml created."
+Log "Config created successfully."
+
+Log "Configuration contents:"
+
+Get-Content `
+    -LiteralPath $ServiceConfigFile |
+    ForEach-Object {
+        Log $_
+    }
 
 # ==========================================================
 # VERIFY CONFIG
 # ==========================================================
 
-$Config = Get-Content `
-    -Path $ConfigFile `
+Section "CONFIG VERIFY"
+
+$config = Get-Content `
+    -LiteralPath $ServiceConfigFile `
     -Raw
 
-if ($Config -notmatch "rendezvous_server = '$RendezvousServer`:21116'") {
+$expectedRendezvous =
+    "rendezvous_server = '$RendezvousServer`:21116'"
 
-    Fail "rendezvous_server is missing from RustDesk2.toml."
+$expectedRelay =
+    "relay-server = '$RelayServer'"
+
+$expectedCustom =
+    "custom-rendezvous-server = '$RendezvousServer'"
+
+$expectedKey =
+    "key = '$RustDeskKey'"
+
+if ($config -notlike "*$expectedRendezvous*") {
+
+    Log "ERROR: rendezvous_server is incorrect."
+
+    exit 1
 }
 
-if ($Config -notmatch "relay-server = '$RelayServer'") {
+if ($config -notlike "*$expectedRelay*") {
 
-    Fail "relay-server is missing from RustDesk2.toml."
+    Log "ERROR: relay-server is incorrect."
+
+    exit 1
 }
 
-if ($Config -notmatch "custom-rendezvous-server = '$RendezvousServer'") {
+if ($config -notlike "*$expectedCustom*") {
 
-    Fail "custom-rendezvous-server is missing from RustDesk2.toml."
+    Log "ERROR: custom-rendezvous-server is incorrect."
+
+    exit 1
 }
 
-if ($Config -notmatch "key = '$RustDeskKey'") {
+if ($config -notlike "*$expectedKey*") {
 
-    Fail "RustDesk key is missing from RustDesk2.toml."
+    Log "ERROR: key is incorrect."
+
+    exit 1
 }
 
-Log "RustDesk configuration verified."
+Log "Configuration verified."
 
 # ==========================================================
 # PASSWORD
 # ==========================================================
 
-Log "========================================"
-Log "[PASSWORD]"
-Log "========================================"
+Section "PASSWORD"
 
 Log "Applying RustDesk permanent password..."
 
-$PasswordOutputFile = Join-Path `
-    $env:TEMP `
-    "rustdesk-password-output.log"
+$passwordOutputFile = Join-Path $env:TEMP "rustdesk-password-output.txt"
 
-try {
+Remove-Item `
+    -LiteralPath $passwordOutputFile `
+    -Force `
+    -ErrorAction SilentlyContinue
 
-    $PasswordProcess = Start-Process `
-        -FilePath $RustDeskExe `
-        -ArgumentList @(
-            "--password"
-            $Password
-        ) `
-        -Wait `
-        -PassThru `
-        -NoNewWindow `
-        -RedirectStandardOutput $PasswordOutputFile `
-        -RedirectStandardError $PasswordOutputFile
+$process = Start-Process `
+    -FilePath $RustDeskExe `
+    -ArgumentList @(
+        "--password"
+        $Password
+    ) `
+    -Wait `
+    -PassThru `
+    -NoNewWindow `
+    -RedirectStandardOutput $passwordOutputFile `
+    -RedirectStandardError $passwordOutputFile
 
-    $PasswordExitCode = $PasswordProcess.ExitCode
+Log "RustDesk --password exit code: $($process.ExitCode)"
 
-}
-catch {
+if (Test-Path -LiteralPath $passwordOutputFile) {
 
-    Fail "Unable to execute RustDesk --password: $($_.Exception.Message)"
-}
-
-Log "RustDesk --password exit code: $PasswordExitCode"
-
-if ($PasswordExitCode -ne 0) {
-
-    if (Test-Path $PasswordOutputFile) {
-
-        Log "RustDesk password output:"
-
-        Get-Content $PasswordOutputFile |
-            ForEach-Object {
+    Get-Content `
+        -LiteralPath $passwordOutputFile |
+        ForEach-Object {
+            if ($_ -ne "") {
                 Log $_
             }
-    }
+        }
+}
 
-    Fail "RustDesk password configuration failed."
+if ($process.ExitCode -ne 0) {
+
+    Log "ERROR: RustDesk password configuration failed."
+
+    exit 1
 }
 
 Log "Password applied."
@@ -524,42 +482,68 @@ Log "Password applied."
 # SERVICE INSTALL
 # ==========================================================
 
-Log "========================================"
-Log "[SERVICE]"
-Log "========================================"
+Section "SERVICE INSTALL"
 
 Log "Installing RustDesk service..."
 
-# RustDesk's Windows executable installs its own service.
+$serviceOutputFile = Join-Path $env:TEMP "rustdesk-service-output.txt"
 
-$ServiceInstallOutput = Join-Path `
-    $env:TEMP `
-    "rustdesk-service-install.log"
+Remove-Item `
+    -LiteralPath $serviceOutputFile `
+    -Force `
+    -ErrorAction SilentlyContinue
 
-try {
+$process = Start-Process `
+    -FilePath $RustDeskExe `
+    -ArgumentList @(
+        "--install-service"
+    ) `
+    -Wait `
+    -PassThru `
+    -NoNewWindow `
+    -RedirectStandardOutput $serviceOutputFile `
+    -RedirectStandardError $serviceOutputFile
 
-    $ServiceProcess = Start-Process `
-        -FilePath $RustDeskExe `
-        -ArgumentList "--install-service" `
-        -Wait `
-        -PassThru `
-        -NoNewWindow `
-        -RedirectStandardOutput $ServiceInstallOutput `
-        -RedirectStandardError $ServiceInstallOutput
+Log "RustDesk --install-service exit code: $($process.ExitCode)"
 
-    Log "RustDesk service command exit code: $($ServiceProcess.ExitCode)"
+if (Test-Path -LiteralPath $serviceOutputFile) {
 
+    Get-Content `
+        -LiteralPath $serviceOutputFile |
+        ForEach-Object {
+
+            if ($_ -ne "") {
+                Log $_
+            }
+        }
 }
-catch {
 
-    Fail "Unable to install RustDesk service: $($_.Exception.Message)"
+if ($process.ExitCode -ne 0) {
+
+    Log "ERROR: RustDesk service installation failed."
+
+    Log "Checking Windows services..."
+
+    Get-Service |
+        Where-Object {
+            $_.Name -like "*RustDesk*" -or
+            $_.DisplayName -like "*RustDesk*"
+        } |
+        ForEach-Object {
+
+            Log "Service: $($_.Name)"
+            Log "Display name: $($_.DisplayName)"
+            Log "Status: $($_.Status)"
+        }
+
+    exit 1
 }
-
-Start-Sleep -Seconds 3
 
 # ==========================================================
-# FIND SERVICE
+# WAIT FOR SERVICE
 # ==========================================================
+
+Section "SERVICE START"
 
 Log "Waiting for RustDesk service..."
 
@@ -567,16 +551,12 @@ $RustDeskService = $null
 
 for ($i = 0; $i -lt 20; $i++) {
 
-    foreach ($ServiceName in $ServiceNames) {
-
-        $RustDeskService = Get-Service `
-            -Name $ServiceName `
-            -ErrorAction SilentlyContinue
-
-        if ($null -ne $RustDeskService) {
-            break
-        }
-    }
+    $RustDeskService = Get-Service |
+        Where-Object {
+            $_.Name -like "*RustDesk*" -or
+            $_.DisplayName -like "*RustDesk*"
+        } |
+        Select-Object -First 1
 
     if ($null -ne $RustDeskService) {
         break
@@ -587,38 +567,24 @@ for ($i = 0; $i -lt 20; $i++) {
 
 if ($null -eq $RustDeskService) {
 
-    Log "Service installation output:"
+    Log "ERROR: RustDesk service was not created."
 
-    if (Test-Path $ServiceInstallOutput) {
-
-        Get-Content $ServiceInstallOutput |
-            ForEach-Object {
-                Log $_
-            }
-    }
-
-    Fail "RustDesk service was not found after installation."
+    exit 1
 }
 
-Log "RustDesk service found: $($RustDeskService.Name)"
+Log "RustDesk service found."
+Log "Service name: $($RustDeskService.Name)"
+Log "Display name: $($RustDeskService.DisplayName)"
 
 # ==========================================================
-# SERVICE AUTOSTART
+# SET AUTOMATIC
 # ==========================================================
 
-Log "Configuring RustDesk service for automatic startup..."
+Log "Configuring service startup..."
 
-try {
-
-    Set-Service `
-        -Name $RustDeskService.Name `
-        -StartupType Automatic
-
-}
-catch {
-
-    Fail "Unable to configure RustDesk service startup: $($_.Exception.Message)"
-}
+Set-Service `
+    -Name $RustDeskService.Name `
+    -StartupType Automatic
 
 Log "Service StartupType set to Automatic."
 
@@ -628,199 +594,86 @@ Log "Service StartupType set to Automatic."
 
 Log "Starting RustDesk service..."
 
-try {
+if ($RustDeskService.Status -ne "Running") {
 
     Start-Service `
         -Name $RustDeskService.Name `
         -ErrorAction Stop
-
-}
-catch {
-
-    # It may already be running.
-
-    Log "Start-Service returned: $($_.Exception.Message)"
 }
 
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds 2
 
 $RustDeskService = Get-Service `
-    -Name $RustDeskService.Name `
-    -ErrorAction SilentlyContinue
-
-if ($null -eq $RustDeskService) {
-
-    Fail "RustDesk service disappeared."
-}
+    -Name $RustDeskService.Name
 
 Log "RustDesk service status: $($RustDeskService.Status)"
 
 if ($RustDeskService.Status -ne "Running") {
 
-    Log "Attempting service restart..."
+    Log "ERROR: RustDesk service is not running."
 
-    try {
-
-        Restart-Service `
-            -Name $RustDeskService.Name `
-            -Force `
-            -ErrorAction Stop
-
-    }
-    catch {
-    }
-
-    Start-Sleep -Seconds 3
-
-    $RustDeskService = Get-Service `
-        -Name $RustDeskService.Name `
-        -ErrorAction SilentlyContinue
-}
-
-if ($RustDeskService.Status -ne "Running") {
-
-    Fail "RustDesk service is not running."
-}
-
-Log "RustDesk service is active and running."
-
-# ==========================================================
-# START GUI
-# ==========================================================
-
-Log "========================================"
-Log "[GUI]"
-Log "========================================"
-
-Log "Starting RustDesk GUI..."
-
-try {
-
-    Start-Process `
-        -FilePath $RustDeskExe `
-        -WorkingDirectory $InstallDir
-
-    Log "RustDesk GUI started."
-
-}
-catch {
-
-    Log "WARNING: RustDesk GUI could not be started."
-    Log $_.Exception.Message
+    exit 1
 }
 
 # ==========================================================
-# GET ID
+# FINAL VERIFY
 # ==========================================================
 
-Log "========================================"
-Log "[ID]"
-Log "========================================"
+Section "FINAL"
 
-Log "Getting RustDesk ID..."
-
-$RustDeskId = ""
-
-for ($i = 0; $i -lt 30; $i++) {
-
-    try {
-
-        $Output = & $RustDeskExe --get-id 2>$null
-
-        if ($null -ne $Output) {
-
-            $RustDeskId = (
-                ($Output | Out-String).Trim()
-            )
-        }
-    }
-    catch {
-
-        $RustDeskId = ""
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($RustDeskId)) {
-        break
-    }
-
-    Start-Sleep -Seconds 1
-}
-
-if ([string]::IsNullOrWhiteSpace($RustDeskId)) {
-
-    Log "WARNING: RustDesk ID could not be obtained."
-    Log "Installation itself was successful."
-}
-else {
-
-    Log "RustDesk ID: $RustDeskId"
-}
-
-# ==========================================================
-# FINAL
-# ==========================================================
-
-Log "========================================"
-Log "[FINAL]"
-Log "========================================"
-
-if (Test-Path $RustDeskExe) {
+if (Test-Path -LiteralPath $RustDeskExe -PathType Leaf) {
 
     Log "RustDesk executable: OK"
 }
 else {
 
-    Fail "RustDesk executable is missing."
+    Log "ERROR: RustDesk executable missing."
+
+    exit 1
 }
 
-$FinalService = Get-Service `
-    -Name $RustDeskService.Name `
-    -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $ServiceConfigFile -PathType Leaf) {
 
-if ($null -ne $FinalService) {
-
-    Log "RustDesk service: $($FinalService.Status)"
+    Log "RustDesk configuration: OK"
 }
 else {
 
-    Fail "RustDesk service is missing."
+    Log "ERROR: RustDesk configuration missing."
+
+    exit 1
 }
 
-Log "Configuration: $ConfigFile"
+$RustDeskService = Get-Service `
+    -Name $RustDeskService.Name
 
-Log "Installation completed successfully."
+Log "RustDesk service status: $($RustDeskService.Status)"
 
-Write-Host ""
-Write-Host "========================================"
-Write-Host "RustDesk installation completed"
-Write-Host "========================================"
-Write-Host ""
-Write-Host "Architecture:"
-Write-Host "  $Architecture"
-Write-Host ""
-Write-Host "RustDesk:"
-Write-Host "  $RustDeskExe"
-Write-Host ""
-Write-Host "Service:"
-Write-Host "  $($FinalService.Name)"
-Write-Host ""
-Write-Host "Service status:"
-Write-Host "  $($FinalService.Status)"
-Write-Host ""
-Write-Host "Config:"
-Write-Host "  $ConfigFile"
-Write-Host ""
+if ($RustDeskService.Status -ne "Running") {
 
-if (-not [string]::IsNullOrWhiteSpace($RustDeskId)) {
+    Log "ERROR: RustDesk service is not running."
 
-    Write-Host "RustDesk ID:"
-    Write-Host "  $RustDeskId"
-    Write-Host ""
+    exit 1
 }
 
-Write-Host "Log:"
-Write-Host "  $InstallLog"
-Write-Host ""
-Write-Host "========================================"
+# ==========================================================
+# RESULT
+# ==========================================================
+
+Log ""
+Log "========================================"
+Log "RustDesk installation completed"
+Log "========================================"
+Log ""
+Log "Architecture: $Architecture"
+Log "RustDesk executable: $RustDeskExe"
+Log "Service: $($RustDeskService.Name)"
+Log "Service status: $($RustDeskService.Status)"
+Log "Rendezvous: $RendezvousServer"
+Log "Relay: $RelayServer"
+Log "Config: $ServiceConfigFile"
+Log "Password: configured"
+Log "Installer log: $InstallLog"
+Log ""
+Log "========================================"
 
 exit 0
