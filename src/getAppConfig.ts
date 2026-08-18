@@ -13,7 +13,7 @@ export async function getAppConfig(): Promise<AppConfig> {
   if (import.meta.env.DEV) {
     return {
       token: "ee6ff174c642b13ef5a5144f",
-      password: "odZ1dF8T55TM",
+      password: "Demo111!",
       config:
         "=0nI9MWTLBXTuZjQ6FDUttmN1V3Q3U0QKhmSBBla2EWQ5gFUN50ZrV2byATaMtiI6ISeltmIsIiI6ISawFmIsISbvNmLk1WYk5WZnFWbus2clRGdzVnciojI5FGblJnIsISbvNmLk1WYk5WZnFWbus2clRGdzVnciojI0N3boJye",
     } as AppConfig;

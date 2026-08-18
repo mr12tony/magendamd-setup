@@ -1,655 +1,319 @@
 #!/bin/bash
 
-set -u
+set -e
 
-# ==========================================================
-# RustDesk macOS installer for Tauri
-#
-# Tauri runs:
-#
-#   bash resources/macos/install.sh PASSWORD
-#
-# The script itself requests administrator privileges.
-#
-# RustDesk:
-#   1.4.9
-#
-# IMPORTANT:
-#   We intentionally DO NOT use:
-#
-#       RustDesk --config ...
-#
-# Network configuration is written directly to RustDesk2.toml.
-# ==========================================================
+# ============================================================
+# REAL CONSOLE USER
+# ============================================================
 
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
+REAL_USER="$(stat -f '%Su' /dev/console)"
 
-# ==========================================================
-# ORIGINAL SCRIPT DIRECTORY
-# ==========================================================
+REAL_HOME="$(
+    dscl . -read "/Users/$REAL_USER" NFSHomeDirectory 2>/dev/null |
+    awk '{print $2}'
+)"
+
+if [ -z "$REAL_HOME" ]; then
+    echo "ERROR: Cannot determine user home."
+    exit 1
+fi
+
+
+# ============================================================
+# PATHS
+# ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# ==========================================================
-# ARGUMENTS
-# ==========================================================
+CONFIG_SOURCE="$SCRIPT_DIR/RustDesk2.toml"
 
-PASSWORD="${1:-}"
+RUSTDESK_APP="/Applications/RustDesk.app"
+RUSTDESK_BIN="$RUSTDESK_APP/Contents/MacOS/RustDesk"
 
-if [ -z "$PASSWORD" ]; then
-    echo "ERROR: RustDesk password is required."
-    exit 1
+RUSTDESK_CONFIG_DIR="$REAL_HOME/Library/Preferences/com.carriez.RustDesk"
+
+RUSTDESK_CONFIG="$RUSTDESK_CONFIG_DIR/RustDesk2.toml"
+RUSTDESK_MAIN_CONFIG="$RUSTDESK_CONFIG_DIR/RustDesk.toml"
+
+BACKUP_CONFIG="$RUSTDESK_CONFIG_DIR/RustDesk2.toml.backup"
+
+
+# ============================================================
+# PASSWORD
+# ============================================================
+
+if [ -n "$1" ]; then
+    PASSWORD="$1"
+    PASSWORD_GENERATED=false
+else
+    PASSWORD="$(openssl rand -hex 8)"
+    PASSWORD_GENERATED=true
 fi
 
-# ==========================================================
-# CONFIGURATION
-# ==========================================================
 
-RENDEZVOUS_SERVER="rustdesk.magendamd.com"
-RELAY_SERVER="rustdesk.magendamd.com"
+# ============================================================
+# ADMIN ELEVATION
+# ============================================================
 
-RUSTDESK_KEY="+Li02oekgNMPX9Aa6jPAJhJCE7Cuu6kmP1zB6nMpKMc="
+if [ "$EUID" -ne 0 ]; then
 
-# ==========================================================
-# LOGGING
-# ==========================================================
+    echo "[0/8] Requesting administrator privileges..."
 
-LOG_FILE="/tmp/rustdesk-install.log"
+    SCRIPT_PATH="$SCRIPT_DIR/$(basename "$0")"
 
-touch "$LOG_FILE" 2>/dev/null || true
+    if [ -n "$1" ]; then
 
-log() {
-    local message="$1"
+        # Передаём пароль как аргумент
+        /usr/bin/osascript \
+            -e 'do shell script "'"$SCRIPT_PATH"' " & quoted form of "'"$PASSWORD"'" with administrator privileges'
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $message" |
-        tee -a "$LOG_FILE"
-}
+    else
 
-# ==========================================================
-# FIND CONSOLE USER
-# ==========================================================
+        /usr/bin/osascript \
+            -e 'do shell script "'"$SCRIPT_PATH"'" with administrator privileges'
 
-CONSOLE_USER="$(
-    stat -f '%Su' /dev/console 2>/dev/null || true
-)"
-
-if [ -z "$CONSOLE_USER" ] ||
-   [ "$CONSOLE_USER" = "root" ] ||
-   [ "$CONSOLE_USER" = "loginwindow" ]; then
-
-    log "ERROR: no logged-in GUI user found."
-    exit 1
-fi
-
-USER_HOME="$(
-    dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
-        awk '{print $2}'
-)"
-
-if [ -z "$USER_HOME" ]; then
-    USER_HOME="/Users/$CONSOLE_USER"
-fi
-
-USER_CONFIG_DIR="$USER_HOME/Library/Preferences/com.carriez.RustDesk"
-
-USER_RUSTDESK2="$USER_CONFIG_DIR/RustDesk2.toml"
-
-USER_UID="$(
-    id -u "$CONSOLE_USER"
-)"
-
-# ==========================================================
-# ADMIN PRIVILEGES
-# ==========================================================
-
-if [ "$(id -u)" -ne 0 ]; then
-
-    log "Administrator privileges required."
-
-    TEMP_SCRIPT="$(
-        mktemp /tmp/rustdesk-install.XXXXXX.sh
-    )"
-
-    if [ ! -f "$TEMP_SCRIPT" ]; then
-        log "ERROR: failed to create temporary installer."
-        exit 1
     fi
 
-    # ------------------------------------------------------
-    # Copy this exact installer to /tmp.
-    #
-    # SCRIPT_DIR is passed explicitly to the root phase.
-    # ------------------------------------------------------
+    exit $?
 
-    cp "$0" "$TEMP_SCRIPT"
-
-    chmod 700 "$TEMP_SCRIPT"
-
-    PROMPT="Administrator privileges are required to install RustDesk."
-
-    log "Requesting administrator privileges..."
-
-    /usr/bin/osascript \
-        -e 'on run argv' \
-        -e 'set scriptPath to item 1 of argv' \
-        -e 'set passwordValue to item 2 of argv' \
-        -e 'set scriptDirectory to item 3 of argv' \
-        -e 'set promptText to item 4 of argv' \
-        -e 'do shell script "/bin/bash " & quoted form of scriptPath & " " & quoted form of passwordValue & " " & quoted form of scriptDirectory with administrator privileges with prompt promptText' \
-        -e 'end run' \
-        -- \
-        "$TEMP_SCRIPT" \
-        "$PASSWORD" \
-        "$SCRIPT_DIR" \
-        "$PROMPT"
-
-    EXIT_CODE=$?
-
-    rm -f "$TEMP_SCRIPT"
-
-    if [ "$EXIT_CODE" -ne 0 ]; then
-        log "ERROR: administrator authorization failed."
-        exit "$EXIT_CODE"
-    fi
-
-    exit 0
 fi
 
-# ==========================================================
-# ROOT PHASE
-# ==========================================================
+echo "[0/8] Administrator privileges: OK"
 
-# When running as root through the temporary script,
-# $2 contains the original bundled SCRIPT_DIR.
 
-ORIGINAL_SCRIPT_DIR="${2:-$SCRIPT_DIR}"
-
-if [ -d "$ORIGINAL_SCRIPT_DIR" ]; then
-    SCRIPT_DIR="$ORIGINAL_SCRIPT_DIR"
-fi
-
-# ==========================================================
-# PATHS
-# ==========================================================
-
-APP="/Applications/RustDesk.app"
-
-RUSTDESK="$APP/Contents/MacOS/RustDesk"
-
-MOUNT_POINT="/Volumes/RustDeskInstaller"
-
-SERVER_LOG="/tmp/rustdesk-server.log"
-
-USER_LOG="/tmp/rustdesk-user.log"
-
-# ==========================================================
-# HEADER
-# ==========================================================
+# ============================================================
+# FIND LOCAL DMG BY ARCHITECTURE
+# ============================================================
 
 echo ""
-echo "========================================"
-echo "RustDesk installer"
-echo "========================================"
-
-log "Running as      : $(id -un)"
-log "Console user    : $CONSOLE_USER"
-log "User home       : $USER_HOME"
-log "Script directory: $SCRIPT_DIR"
-
-# ==========================================================
-# ARCHITECTURE
-# ==========================================================
+echo "Detecting Mac architecture..."
 
 ARCH="$(uname -m)"
 
 case "$ARCH" in
 
     arm64)
-        BUNDLED_DMG="$SCRIPT_DIR/rustdesk-aarch64.dmg"
+        DMG_PATTERN="*aarch64*.dmg"
+        echo "Architecture: Apple Silicon (arm64)"
         ;;
 
     x86_64)
-        BUNDLED_DMG="$SCRIPT_DIR/rustdesk-x86_64.dmg"
+        DMG_PATTERN="*x86_64*.dmg"
+        echo "Architecture: Intel (x86_64)"
         ;;
 
     *)
-        log "ERROR: unsupported architecture: $ARCH"
+        echo ""
+        echo "ERROR: Unsupported architecture:"
+        echo "$ARCH"
         exit 1
         ;;
 
 esac
 
-log "Architecture: $ARCH"
-log "DMG: $BUNDLED_DMG"
 
-if [ ! -f "$BUNDLED_DMG" ]; then
+DMG_FILE=""
 
-    log "ERROR: RustDesk DMG not found:"
-    log "$BUNDLED_DMG"
+for file in "$SCRIPT_DIR"/$DMG_PATTERN; do
 
-    exit 1
-fi
-
-# ==========================================================
-# STOP RUSTDESK
-# ==========================================================
-
-log "Stopping RustDesk..."
-
-pkill -9 -x RustDesk 2>/dev/null || true
-
-pkill -9 -f "/RustDesk.app/" 2>/dev/null || true
-
-sleep 1
-
-# ==========================================================
-# STOP SERVICES
-# ==========================================================
-
-log "Stopping RustDesk services..."
-
-launchctl bootout \
-    system/com.carriez.RustDesk_service \
-    2>/dev/null || true
-
-launchctl bootout \
-    "gui/$USER_UID/com.carriez.RustDesk.autostart" \
-    2>/dev/null || true
-
-# ==========================================================
-# REMOVE SERVICE FILES
-# ==========================================================
-
-log "Removing old service files..."
-
-rm -f \
-    "/Library/LaunchDaemons/com.carriez.RustDesk_service.plist" \
-    "/Library/LaunchAgents/com.carriez.RustDesk_service.plist" \
-    "$USER_HOME/Library/LaunchAgents/com.carriez.RustDesk.autostart.plist"
-
-# ==========================================================
-# REMOVE APP
-# ==========================================================
-
-log "Removing old RustDesk.app..."
-
-rm -rf "$APP"
-
-# ==========================================================
-# REMOVE USER DATA
-# ==========================================================
-
-log "Removing old RustDesk configuration..."
-
-rm -rf "$USER_CONFIG_DIR"
-
-rm -rf \
-    "$USER_HOME/Library/Logs/RustDesk" \
-    "$USER_HOME/Library/Application Support/RustDesk" \
-    "$USER_HOME/Library/Caches/com.carriez.RustDesk" \
-    "$USER_HOME/Library/Saved Application State/com.carriez.RustDesk.savedState"
-
-# ==========================================================
-# REMOVE SYSTEM DATA
-# ==========================================================
-
-log "Removing system RustDesk leftovers..."
-
-rm -rf \
-    "/Library/Application Support/RustDesk" \
-    "/Library/Logs/RustDesk" \
-    "/Library/Preferences/com.carriez.RustDesk" \
-    "/var/root/Library/Preferences/com.carriez.RustDesk" \
-    "/var/root/Library/Logs/RustDesk"
-
-# ==========================================================
-# UNMOUNT OLD DMGs
-# ==========================================================
-
-log "Unmounting old RustDesk DMGs..."
-
-for volume in /Volumes/*; do
-
-    if [ -d "$volume" ]; then
-
-        case "$volume" in
-
-            *rustdesk*|*RustDesk*)
-
-                log "Unmounting: $volume"
-
-                hdiutil detach "$volume" \
-                    -force \
-                    >/dev/null 2>&1 || true
-
-                ;;
-
-        esac
-
+    if [ -f "$file" ]; then
+        DMG_FILE="$file"
+        break
     fi
 
 done
 
-rm -rf "$MOUNT_POINT"
 
-# ==========================================================
-# MOUNT DMG
-# ==========================================================
+if [ -z "$DMG_FILE" ]; then
 
-log "Mounting RustDesk DMG..."
+    echo ""
+    echo "ERROR: RustDesk DMG for architecture '$ARCH' not found."
+    echo ""
+    echo "Expected pattern:"
+    echo "  $SCRIPT_DIR/$DMG_PATTERN"
+    echo ""
 
-mkdir -p "$MOUNT_POINT"
+    echo "Available DMG files:"
+
+    ls -1 "$SCRIPT_DIR"/*.dmg 2>/dev/null || \
+        echo "  No DMG files found."
+
+    exit 1
+
+fi
+
+
+echo ""
+echo "RustDesk DMG:"
+echo "  $DMG_FILE"
+
+
+# ============================================================
+# CHECK CONFIG
+# ============================================================
+
+if [ ! -f "$CONFIG_SOURCE" ]; then
+
+    echo ""
+    echo "ERROR: RustDesk2.toml not found:"
+    echo "$CONFIG_SOURCE"
+    echo ""
+
+    exit 1
+
+fi
+
+
+# ============================================================
+# 1. INSTALL RUSTDESK FROM LOCAL DMG
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo "[1/8] INSTALLING RUSTDESK"
+echo "============================================================"
+echo ""
+
+MOUNT_POINT="/Volumes/RustDesk"
+
+# Если старый mount существует — сначала отключаем
+
+if mount | grep -q "on $MOUNT_POINT "; then
+
+    echo "Existing RustDesk DMG mount detected."
+    echo "Unmounting..."
+
+    hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
+
+    sleep 2
+
+fi
+
+
+echo "Mounting:"
+echo "  $DMG_FILE"
 
 hdiutil attach \
-    "$BUNDLED_DMG" \
+    "$DMG_FILE" \
     -mountpoint "$MOUNT_POINT" \
     -nobrowse \
-    -quiet
+    >/dev/null
 
-# ==========================================================
-# FIND RUSTDESK.APP
-# ==========================================================
 
-SOURCE_APP="$MOUNT_POINT/RustDesk.app"
+if [ ! -d "$MOUNT_POINT/RustDesk.app" ]; then
 
-if [ ! -d "$SOURCE_APP" ]; then
+    echo ""
+    echo "ERROR: RustDesk.app not found inside DMG."
 
-    SOURCE_APP="$(
-        find "$MOUNT_POINT" \
-            -maxdepth 2 \
-            -type d \
-            -name "RustDesk.app" \
-            -print \
-            -quit
-    )"
-
-fi
-
-if [ -z "${SOURCE_APP:-}" ] ||
-   [ ! -d "$SOURCE_APP" ]; then
-
-    log "ERROR: RustDesk.app not found in DMG."
-
-    hdiutil detach "$MOUNT_POINT" \
-        -force \
-        >/dev/null 2>&1 || true
+    hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
 
     exit 1
+
 fi
 
-log "RustDesk.app found."
 
-# ==========================================================
-# INSTALL APP
-# ==========================================================
+echo "RustDesk.app found."
 
-log "Copying RustDesk.app..."
+echo ""
+echo "Installing RustDesk.app to /Applications..."
 
-ditto "$SOURCE_APP" "$APP"
+# Удаляем старую копию только после успешного mount
 
-# ==========================================================
-# UNMOUNT DMG
-# ==========================================================
+if [ -d "$RUSTDESK_APP" ]; then
 
-log "Unmounting RustDesk DMG..."
+    echo "Removing existing RustDesk.app..."
 
-hdiutil detach "$MOUNT_POINT" \
-    -quiet \
-    >/dev/null 2>&1 || true
+    rm -rf "$RUSTDESK_APP"
 
-# ==========================================================
-# WAIT FOR EXECUTABLE
-# ==========================================================
+fi
 
-log "Waiting for RustDesk executable..."
 
-DEADLINE=$((SECONDS + 60))
+cp -R \
+    "$MOUNT_POINT/RustDesk.app" \
+    "/Applications/"
 
-while [ ! -x "$RUSTDESK" ]; do
 
-    if [ "$SECONDS" -ge "$DEADLINE" ]; then
+echo "RustDesk.app installed."
 
-        log "ERROR: RustDesk executable not found."
 
-        exit 1
-    fi
+# Отмонтируем DMG
 
-    sleep 1
+echo ""
+echo "Unmounting DMG..."
 
-done
+hdiutil detach \
+    "$MOUNT_POINT" \
+    >/dev/null
 
-log "RustDesk executable found."
 
-# ==========================================================
-# APP OWNERSHIP
-# ==========================================================
+echo "DMG unmounted."
 
-chown -R root:wheel "$APP"
 
-# ==========================================================
-# CREATE USER CONFIG DIRECTORY
-# ==========================================================
+# ============================================================
+# CHECK INSTALLED RUSTDESK
+# ============================================================
 
-log "Preparing user configuration..."
+if [ ! -d "$RUSTDESK_APP" ]; then
 
-mkdir -p "$USER_CONFIG_DIR"
-
-chown "$CONSOLE_USER:staff" \
-    "$USER_CONFIG_DIR"
-
-chmod 700 \
-    "$USER_CONFIG_DIR"
-
-# ==========================================================
-# START RUSTDESK AS USER
-# ==========================================================
-
-log "Starting RustDesk GUI as $CONSOLE_USER..."
-
-sudo -u "$CONSOLE_USER" \
-    "$RUSTDESK" \
-    >"$USER_LOG" \
-    2>&1 &
-
-RUSTDESK_USER_PID=$!
-
-log "RustDesk GUI PID: $RUSTDESK_USER_PID"
-
-# ==========================================================
-# WAIT FOR RUSTDESK2.TOML
-# ==========================================================
-
-log "Waiting for RustDesk user configuration..."
-
-DEADLINE=$((SECONDS + 45))
-
-while [ ! -f "$USER_RUSTDESK2" ]; do
-
-    if [ "$SECONDS" -ge "$DEADLINE" ]; then
-
-        log "ERROR: RustDesk2.toml was not created."
-
-        echo ""
-        echo "RustDesk log:"
-        cat "$USER_LOG" 2>/dev/null || true
-
-        exit 1
-    fi
-
-    sleep 1
-
-done
-
-log "User configuration created."
-
-# ==========================================================
-# PASSWORD
-# ==========================================================
-
-log "Applying RustDesk password..."
-
-PASSWORD_OUTPUT="$(
-    "$RUSTDESK" \
-        --password "$PASSWORD" \
-        2>&1
-)"
-
-PASSWORD_EXIT=$?
-
-if [ "$PASSWORD_EXIT" -ne 0 ]; then
-
-    log "ERROR: password configuration failed."
-
-    log "$PASSWORD_OUTPUT"
+    echo ""
+    echo "ERROR: RustDesk.app installation failed."
 
     exit 1
+
 fi
 
-log "Password applied."
 
-# ==========================================================
-# NETWORK CONFIGURATION
-#
-# DO NOT USE:
-#
-#   --config
-#
-# We write the working GUI-compatible TOML directly.
-# ==========================================================
+if [ ! -x "$RUSTDESK_BIN" ]; then
 
-log "Applying network configuration..."
-
-cat > "$USER_RUSTDESK2" <<EOF
-rendezvous_server = '$RENDEZVOUS_SERVER:21116'
-nat_type = 1
-serial = 0
-unlock_pin = ''
-trusted_devices = ''
-
-[options]
-relay-server = '$RELAY_SERVER'
-custom-rendezvous-server = '$RENDEZVOUS_SERVER'
-key = '$RUSTDESK_KEY'
-EOF
-
-# ==========================================================
-# OWNERSHIP
-# ==========================================================
-
-log "Fixing configuration ownership..."
-
-chown "$CONSOLE_USER:staff" \
-    "$USER_CONFIG_DIR"
-
-chmod 700 \
-    "$USER_CONFIG_DIR"
-
-for file in "$USER_CONFIG_DIR"/*.toml; do
-
-    [ -f "$file" ] || continue
-
-    chown "$CONSOLE_USER:staff" "$file"
-
-    chmod 600 "$file"
-
-done
-
-# ==========================================================
-# VERIFY CONFIG
-# ==========================================================
-
-log "Checking RustDesk2.toml..."
-
-if ! grep -q \
-    "rendezvous_server = '$RENDEZVOUS_SERVER:21116'" \
-    "$USER_RUSTDESK2"; then
-
-    log "ERROR: rendezvous_server was not configured."
+    echo ""
+    echo "ERROR: RustDesk executable not found:"
+    echo "$RUSTDESK_BIN"
 
     exit 1
+
 fi
 
-if ! grep -q \
-    "custom-rendezvous-server = '$RENDEZVOUS_SERVER'" \
-    "$USER_RUSTDESK2"; then
 
-    log "ERROR: custom rendezvous server was not configured."
+echo ""
+echo "RustDesk installation verified."
 
-    exit 1
-fi
 
-if ! grep -q \
-    "relay-server = '$RELAY_SERVER'" \
-    "$USER_RUSTDESK2"; then
+# ============================================================
+# 2. STOP RUSTDESK
+# ============================================================
 
-    log "ERROR: relay server was not configured."
+echo ""
+echo "============================================================"
+echo "[2/8] STOPPING RUSTDESK"
+echo "============================================================"
+echo ""
 
-    exit 1
-fi
+# Закрываем GUI именно от имени пользователя
 
-if ! grep -q \
-    "key = '$RUSTDESK_KEY'" \
-    "$USER_RUSTDESK2"; then
-
-    log "ERROR: RustDesk key was not configured."
-
-    exit 1
-fi
-
-log "Network configuration verified."
-
-# ==========================================================
-# STOP TEMPORARY GUI
-# ==========================================================
-
-log "Stopping temporary RustDesk GUI..."
-
-kill "$RUSTDESK_USER_PID" \
+sudo -u "$REAL_USER" \
+    osascript -e 'tell application "RustDesk" to quit' \
     2>/dev/null || true
 
 sleep 2
 
-pkill -9 -x RustDesk \
-    2>/dev/null || true
 
-sleep 2
+# Если процесс остался
 
-# ==========================================================
-# START RUSTDESK AGAIN
-# ==========================================================
+if pgrep -x "RustDesk" >/dev/null 2>&1; then
 
-log "Starting RustDesk again..."
+    echo "RustDesk still running."
+    echo "Force stopping..."
 
-sudo -u "$CONSOLE_USER" \
-    "$RUSTDESK" \
-    >"$USER_LOG" \
-    2>&1 &
+    pkill -x "RustDesk" 2>/dev/null || true
 
-FINAL_GUI_PID=$!
+fi
 
-log "RustDesk GUI PID: $FINAL_GUI_PID"
 
-sleep 3
+# Ждём полного завершения
 
-# ==========================================================
-# GET ID
-# ==========================================================
+for i in {1..15}; do
 
-log "Getting RustDesk ID..."
-
-ID=""
-
-for i in $(seq 1 30); do
-
-    ID="$(
-        sudo -u "$CONSOLE_USER" \
-        "$RUSTDESK" \
-        --get-id \
-        2>/dev/null |
-        tr -d '\r\n '
-    )"
-
-    if [ -n "$ID" ]; then
+    if ! pgrep -x "RustDesk" >/dev/null 2>&1; then
         break
     fi
 
@@ -657,97 +321,347 @@ for i in $(seq 1 30); do
 
 done
 
-if [ -z "$ID" ]; then
 
-    log "ERROR: RustDesk ID is empty."
+if pgrep -x "RustDesk" >/dev/null 2>&1; then
 
     echo ""
-    echo "RustDesk user log:"
-    cat "$USER_LOG" 2>/dev/null || true
+    echo "ERROR: RustDesk process is still running."
 
     exit 1
+
 fi
 
-# ==========================================================
-# FINAL OWNERSHIP
-# ==========================================================
 
-chown "$CONSOLE_USER:staff" \
-    "$USER_CONFIG_DIR"
+echo "RustDesk stopped."
 
-chmod 700 \
-    "$USER_CONFIG_DIR"
 
-for file in "$USER_CONFIG_DIR"/*.toml; do
+# ============================================================
+# 3. CONFIG DIRECTORY
+# ============================================================
 
-    [ -f "$file" ] || continue
+echo ""
+echo "============================================================"
+echo "[3/8] PREPARING CONFIGURATION"
+echo "============================================================"
+echo ""
 
-    chown "$CONSOLE_USER:staff" "$file"
+mkdir -p "$RUSTDESK_CONFIG_DIR"
 
-    chmod 600 "$file"
+chown "$REAL_USER" "$RUSTDESK_CONFIG_DIR"
+chmod 700 "$RUSTDESK_CONFIG_DIR"
+
+
+# ============================================================
+# 4. BACKUP + INSTALL RustDesk2.toml
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo "[4/8] INSTALLING RustDesk2.toml"
+echo "============================================================"
+echo ""
+
+
+# ------------------------------------------------------------
+# BACKUP
+# ------------------------------------------------------------
+
+if [ -f "$RUSTDESK_CONFIG" ]; then
+
+    cp -f \
+        "$RUSTDESK_CONFIG" \
+        "$BACKUP_CONFIG"
+
+    chown "$REAL_USER" "$BACKUP_CONFIG"
+    chmod 600 "$BACKUP_CONFIG"
+
+    echo "Backup created:"
+    echo "  $BACKUP_CONFIG"
+
+else
+
+    echo "Existing RustDesk2.toml not found."
+    echo "No backup required."
+
+fi
+
+
+# ------------------------------------------------------------
+# COPY CONFIG
+# ------------------------------------------------------------
+
+cp -f \
+    "$CONFIG_SOURCE" \
+    "$RUSTDESK_CONFIG"
+
+chown "$REAL_USER" "$RUSTDESK_CONFIG"
+chmod 600 "$RUSTDESK_CONFIG"
+
+
+echo ""
+echo "RustDesk2.toml installed:"
+echo "  $RUSTDESK_CONFIG"
+
+
+# ------------------------------------------------------------
+# VERIFY
+# ------------------------------------------------------------
+
+if [ ! -f "$RUSTDESK_CONFIG" ]; then
+
+    echo ""
+    echo "ERROR: RustDesk2.toml was not installed."
+
+    exit 1
+
+fi
+
+
+echo ""
+echo "===== INSTALLED RustDesk2.toml ====="
+echo ""
+
+cat "$RUSTDESK_CONFIG"
+
+echo ""
+echo "===================================="
+
+
+# ============================================================
+# 5. START RUSTDESK GUI
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo "[5/8] STARTING RUSTDESK"
+echo "============================================================"
+echo ""
+
+sudo -u "$REAL_USER" \
+    open -a "$RUSTDESK_APP"
+
+
+echo "Waiting for RustDesk process..."
+
+
+RUSTDESK_RUNNING=false
+
+for i in {1..20}; do
+
+    if pgrep -x "RustDesk" >/dev/null 2>&1; then
+
+        RUSTDESK_RUNNING=true
+        break
+
+    fi
+
+    sleep 1
 
 done
 
-# ==========================================================
-# FINAL CONFIG CHECK
-# ==========================================================
+
+if [ "$RUSTDESK_RUNNING" != "true" ]; then
+
+    echo ""
+    echo "ERROR: RustDesk did not start."
+
+    exit 1
+
+fi
+
+
+echo "RustDesk is running."
 
 echo ""
-echo "Final RustDesk configuration:"
-echo ""
+echo "Waiting 5 seconds for RustDesk initialization..."
 
-grep -E \
-    "rendezvous_server|relay-server|custom-rendezvous-server|^key" \
-    "$USER_RUSTDESK2" \
-    || true
+sleep 5
 
-# ==========================================================
-# OPEN GUI
-# ==========================================================
 
-log "Opening RustDesk GUI..."
-
-launchctl asuser "$USER_UID" \
-    sudo -u "$CONSOLE_USER" \
-    open -n "$APP" \
-    >/dev/null 2>&1 || true
-
-# ==========================================================
-# RESULT
-# ==========================================================
+# ============================================================
+# 6. APPLY PASSWORD
+# ============================================================
 
 echo ""
-echo "========================================"
-echo "RustDesk installation completed"
-echo "========================================"
+echo "============================================================"
+echo "[6/8] APPLYING RUSTDESK PASSWORD"
+echo "============================================================"
 echo ""
-echo "User:"
-echo "  $CONSOLE_USER"
+
+echo "Password:"
+echo "  $PASSWORD"
+
+if [ "$PASSWORD_GENERATED" = "true" ]; then
+    echo "  (randomly generated)"
+else
+    echo "  (provided by user)"
+fi
+
+
 echo ""
-echo "Architecture:"
-echo "  $ARCH"
+echo "Executing:"
+echo "  RustDesk --password ********"
+echo ""
+
+
+"$RUSTDESK_BIN" \
+    --password "$PASSWORD"
+
+PASSWORD_EXIT_CODE=$?
+
+
+echo ""
+echo "RustDesk --password exit code:"
+echo "  $PASSWORD_EXIT_CODE"
+
+
+if [ "$PASSWORD_EXIT_CODE" -ne 0 ]; then
+
+    echo ""
+    echo "ERROR: Failed to set RustDesk password."
+
+    exit "$PASSWORD_EXIT_CODE"
+
+fi
+
+
+echo ""
+echo "Password applied successfully."
+
+
+# ============================================================
+# 7. VERIFY RustDesk.toml
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo "[7/8] VERIFYING RustDesk.toml"
+echo "============================================================"
+echo ""
+
+
+if [ ! -f "$RUSTDESK_MAIN_CONFIG" ]; then
+
+    echo ""
+    echo "ERROR: RustDesk.toml was not created:"
+    echo "$RUSTDESK_MAIN_CONFIG"
+
+    exit 1
+
+fi
+
+
+# ------------------------------------------------------------
+# CHECK PASSWORD
+# ------------------------------------------------------------
+
+HAS_PASSWORD=false
+HAS_SALT=false
+
+
+if grep -q "^password = " "$RUSTDESK_MAIN_CONFIG"; then
+    HAS_PASSWORD=true
+fi
+
+
+if grep -q "^salt = " "$RUSTDESK_MAIN_CONFIG"; then
+    HAS_SALT=true
+fi
+
+
+echo "RustDesk.toml:"
+echo "  $RUSTDESK_MAIN_CONFIG"
+
+echo ""
+echo "Password field:"
+echo "  $HAS_PASSWORD"
+
+echo "Salt field:"
+echo "  $HAS_SALT"
+
+
+if [ "$HAS_PASSWORD" != "true" ]; then
+
+    echo ""
+    echo "ERROR: password field not found in RustDesk.toml."
+
+    exit 1
+
+fi
+
+
+if [ "$HAS_SALT" != "true" ]; then
+
+    echo ""
+    echo "ERROR: salt field not found in RustDesk.toml."
+
+    exit 1
+
+fi
+
+
+echo ""
+echo "Password configuration verified."
+
+
+# ============================================================
+# GET RUSTDESK ID
+# ============================================================
+
+echo ""
+echo "Getting RustDesk ID..."
+
+RUSTDESK_ID=""
+
+RUSTDESK_ID="$(
+    sudo -u "$REAL_USER" \
+    "$RUSTDESK_BIN" --get-id \
+    2>/dev/null || true
+)"
+
+
+# ============================================================
+# 8. FINAL
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo "                         DONE"
+echo "============================================================"
+echo ""
+
+echo "RustDesk:"
+echo "  $RUSTDESK_APP"
+
 echo ""
 echo "RustDesk ID:"
-echo "  $ID"
+
+if [ -n "$RUSTDESK_ID" ]; then
+    echo "  $RUSTDESK_ID"
+else
+    echo "  Failed to get RustDesk ID."
+fi
+
 echo ""
-echo "Network:"
-echo "  $RENDEZVOUS_SERVER"
+echo "User:"
+echo "  $REAL_USER"
+
 echo ""
-echo "Relay:"
-echo "  $RELAY_SERVER"
+echo "RustDesk2.toml:"
+echo "  $RUSTDESK_CONFIG"
+
+echo ""
+echo "RustDesk.toml:"
+echo "  $RUSTDESK_MAIN_CONFIG"
+
 echo ""
 echo "Password:"
-echo "  configured"
-echo ""
-echo "User config:"
-echo "  $USER_CONFIG_DIR"
-echo ""
-echo "Installer log:"
-echo "  $LOG_FILE"
-echo ""
-echo "User log:"
-echo "  $USER_LOG"
-echo ""
-echo "========================================"
+echo "  $PASSWORD"
 
-exit 0
+echo ""
+echo "GUI:"
+echo "  RUNNING"
+
+echo ""
+echo "============================================================"
+echo ""
