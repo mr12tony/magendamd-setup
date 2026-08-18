@@ -3,53 +3,73 @@
     [string]$RustDeskPassword,
 
     [Parameter()]
-    [string]$PasswordFile
+    [string]$PasswordFile,
+
+    [Parameter()]
+    [string]$OriginalUserName,
+
+    [Parameter()]
+    [string]$OriginalUserProfile
 )
 
 $ErrorActionPreference = "Stop"
 
 # ============================================================
 # RUSTDESK WINDOWS LOCAL INSTALL + CONFIG + PASSWORD
+#
+# Files expected next to this script:
+#
+#   install.ps1
+#   RustDesk2.toml
+#   rustdesk-x86_64.exe
+#   rustdesk-arm64.exe
+#
+# Usage:
+#
+#   .\install.ps1 MyPassword123
+#
 # ============================================================
 
 
 # ============================================================
 # IMPORTANT:
-# SAVE REAL USER BEFORE UAC ELEVATION
+# DETERMINE REAL INTERACTIVE USER BEFORE UAC
 # ============================================================
 
-$OriginalUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+if ([string]::IsNullOrWhiteSpace($OriginalUserName)) {
 
-$RealUserName = $OriginalUser.Split('\')[-1]
+    $CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+
+    $OriginalUserName = $CurrentIdentity.Name.Split('\')[-1]
+}
 
 
 # ============================================================
-# REAL USER HOME
+# REAL USER PROFILE
 # ============================================================
 
-$RealUserProfile = $env:USERPROFILE
+if ([string]::IsNullOrWhiteSpace($OriginalUserProfile)) {
 
-if ($env:USERNAME -ne $RealUserName) {
-
-    $profilePath = $null
+    $OriginalUserProfile = $env:USERPROFILE
 
     try {
 
         $profilePath = (
             Get-CimInstance Win32_UserProfile |
             Where-Object {
-                $_.LocalPath -like "C:\Users\$RealUserName"
+                $_.LocalPath -eq "C:\Users\$OriginalUserName" -and
+                $_.Loaded -eq $true
             } |
             Select-Object -First 1 -ExpandProperty LocalPath
         )
 
+        if (-not [string]::IsNullOrWhiteSpace($profilePath)) {
+            $OriginalUserProfile = $profilePath
+        }
+
     }
     catch {
-        $profilePath = $null
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($profilePath)) {
-        $RealUserProfile = $profilePath
+        # Keep current profile if lookup fails.
     }
 }
 
@@ -74,8 +94,13 @@ $RustDeskExe = Join-Path `
     $RustDeskInstallDir `
     "RustDesk.exe"
 
+
+# ------------------------------------------------------------
+# USER CONFIG
+# ------------------------------------------------------------
+
 $UserConfigDir = Join-Path `
-    $RealUserProfile `
+    $OriginalUserProfile `
     "AppData\Roaming\RustDesk\config"
 
 $UserConfig = Join-Path `
@@ -87,6 +112,10 @@ $UserPasswordConfig = Join-Path `
     "RustDesk.toml"
 
 
+# ------------------------------------------------------------
+# SERVICE / LOCAL SYSTEM CONFIG
+# ------------------------------------------------------------
+
 $SystemConfigDir = `
     "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config"
 
@@ -94,8 +123,7 @@ $SystemConfig = Join-Path `
     $SystemConfigDir `
     "RustDesk2.toml"
 
-$SystemPasswordConfig = `
-    Join-Path `
+$SystemPasswordConfig = Join-Path `
     $SystemConfigDir `
     "RustDesk.toml"
 
@@ -129,6 +157,10 @@ if (-not $isAdmin) {
 
     $TempPasswordFile = ""
 
+    # --------------------------------------------------------
+    # Preserve password through UAC
+    # --------------------------------------------------------
+
     if (-not [string]::IsNullOrWhiteSpace($RustDeskPassword)) {
 
         $TempPasswordFile = Join-Path `
@@ -147,10 +179,12 @@ if (-not $isAdmin) {
             "-NoProfile"
             "-ExecutionPolicy"
             "Bypass"
-            "-WindowStyle"
-            "Hidden"
             "-File"
             "`"$PSCommandPath`""
+            "-OriginalUserName"
+            "`"$OriginalUserName`""
+            "-OriginalUserProfile"
+            "`"$OriginalUserProfile`""
         )
 
         if (-not [string]::IsNullOrWhiteSpace($TempPasswordFile)) {
@@ -272,11 +306,11 @@ Write-Host "============================================================"
 Write-Host ""
 
 Write-Host "Real user:"
-Write-Host "  $RealUserName"
+Write-Host "  $OriginalUserName"
 
 Write-Host ""
 Write-Host "Real user profile:"
-Write-Host "  $RealUserProfile"
+Write-Host "  $OriginalUserProfile"
 
 Write-Host ""
 Write-Host "Script directory:"
@@ -392,35 +426,31 @@ Write-Host ""
 
 
 # ============================================================
-# 1/8 STOP EXISTING RUSTDESK
+# FUNCTION:
+# STOP RUSTDESK COMPLETELY
 # ============================================================
 
-Write-Host "============================================================"
-Write-Host "[1/8] STOPPING EXISTING RUSTDESK"
-Write-Host "============================================================"
-Write-Host ""
+function Stop-RustDeskCompletely {
 
+    Write-Host ""
+    Write-Host "Stopping RustDesk service..."
 
-$service = Get-Service `
-    -Name $ServiceName `
-    -ErrorAction SilentlyContinue
+    $service = Get-Service `
+        -Name $ServiceName `
+        -ErrorAction SilentlyContinue
 
-if ($null -ne $service) {
+    if ($null -ne $service) {
 
-    Write-Host "Current service status: $($service.Status)"
+        if ($service.Status -ne "Stopped") {
 
-    if ($service.Status -ne "Stopped") {
+            Stop-Service `
+                -Name $ServiceName `
+                -Force `
+                -ErrorAction SilentlyContinue
 
-        Write-Host "Stopping RustDesk service..."
+        }
 
-        Stop-Service `
-            -Name $ServiceName `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-        for ($i = 0; $i -lt 20; $i++) {
-
-            Start-Sleep -Milliseconds 500
+        for ($i = 0; $i -lt 30; $i++) {
 
             $service = Get-Service `
                 -Name $ServiceName `
@@ -432,74 +462,71 @@ if ($null -ne $service) {
             ) {
                 break
             }
+
+            Start-Sleep -Milliseconds 500
         }
     }
 
-    $service = Get-Service `
-        -Name $ServiceName `
-        -ErrorAction SilentlyContinue
 
-    if (
-        $null -ne $service -and
-        $service.Status -ne "Stopped"
-    ) {
+    Write-Host "Stopping RustDesk GUI..."
 
-        Write-Host ""
-        Write-Host "ERROR: RustDesk service could not be stopped." -ForegroundColor Red
+    Get-Process `
+        -Name "RustDesk" `
+        -ErrorAction SilentlyContinue |
+        Stop-Process `
+            -Force `
+            -ErrorAction SilentlyContinue
 
-        exit 1
+
+    for ($i = 0; $i -lt 30; $i++) {
+
+        $process = Get-Process `
+            -Name "RustDesk" `
+            -ErrorAction SilentlyContinue
+
+        if ($null -eq $process) {
+            break
+        }
+
+        Start-Sleep -Milliseconds 500
     }
 
-    Write-Host "RustDesk service stopped."
-
-}
-else {
-
-    Write-Host "RustDesk service not found."
-}
-
-
-Get-Process `
-    -Name "RustDesk" `
-    -ErrorAction SilentlyContinue |
-    Stop-Process `
-        -Force `
-        -ErrorAction SilentlyContinue
-
-Start-Sleep -Seconds 2
-
-
-for ($i = 0; $i -lt 15; $i++) {
 
     $process = Get-Process `
         -Name "RustDesk" `
         -ErrorAction SilentlyContinue
 
-    if ($null -eq $process) {
-        break
+    if ($null -ne $process) {
+
+        Write-Host ""
+        Write-Host "ERROR: RustDesk process is still running." -ForegroundColor Red
+
+        return $false
     }
 
-    Start-Sleep -Milliseconds 500
+
+    Write-Host "RustDesk completely stopped."
+
+    return $true
 }
-
-
-$process = Get-Process `
-    -Name "RustDesk" `
-    -ErrorAction SilentlyContinue
-
-if ($null -ne $process) {
-
-    Write-Host ""
-    Write-Host "ERROR: RustDesk GUI is still running." -ForegroundColor Red
-
-    exit 1
-}
-
-Write-Host "RustDesk GUI stopped."
 
 
 # ============================================================
-# 2/8 INSTALL RUSTDESK FROM LOCAL EXE
+# 1/8 STOP EXISTING RUSTDESK
+# ============================================================
+
+Write-Host "============================================================"
+Write-Host "[1/8] STOPPING EXISTING RUSTDESK"
+Write-Host "============================================================"
+Write-Host ""
+
+if (-not (Stop-RustDeskCompletely)) {
+    exit 1
+}
+
+
+# ============================================================
+# 2/8 INSTALL RUSTDESK
 # ============================================================
 
 Write-Host ""
@@ -515,35 +542,86 @@ Write-Host ""
 Write-Host "Starting silent RustDesk installation..."
 
 
+# ------------------------------------------------------------
+# REMOVE OLD EXE REFERENCE ONLY AFTER PROCESS IS STOPPED
+# ------------------------------------------------------------
+
+$OldExeExists = Test-Path -LiteralPath $RustDeskExe
+
+if ($OldExeExists) {
+
+    try {
+
+        $oldFile = Get-Item `
+            -LiteralPath $RustDeskExe `
+            -ErrorAction Stop
+
+        Write-Host "Existing RustDesk.exe detected."
+        Write-Host "Existing version timestamp:"
+        Write-Host "  $($oldFile.LastWriteTime)"
+
+    }
+    catch {}
+}
+
+
+# ------------------------------------------------------------
+# START INSTALLER WITHOUT -WAIT
+#
+# IMPORTANT:
+# Do not use -Wait because some RustDesk installers can keep
+# the parent process alive while installation continues in
+# another process.
+# ------------------------------------------------------------
+
 $installerProcess = Start-Process `
     -FilePath $InstallerPath `
     -ArgumentList "--silent-install" `
     -PassThru
 
 
-$InstallerTimeoutSeconds = 60
-$InstallerFinished = $false
+$InstallerTimeoutSeconds = 120
+$RustDeskDetected = $false
 
+
+# ------------------------------------------------------------
+# WAIT FOR RustDesk.exe
+# ------------------------------------------------------------
 
 for ($i = 0; $i -lt $InstallerTimeoutSeconds; $i++) {
 
     Start-Sleep -Seconds 1
 
-    if ($installerProcess.HasExited) {
-
-        $InstallerFinished = $true
-        break
-    }
-
     if (Test-Path -LiteralPath $RustDeskExe) {
 
-        $InstallerFinished = $true
+        $RustDeskDetected = $true
+
+        Write-Host ""
+        Write-Host "RustDesk.exe detected."
+
         break
     }
+
+
+    if ($installerProcess.HasExited) {
+
+        Write-Host ""
+        Write-Host "Installer process exited."
+
+        Write-Host "Installer exit code:"
+        Write-Host "  $($installerProcess.ExitCode)"
+
+        if ($installerProcess.ExitCode -ne 0) {
+
+            Write-Host ""
+            Write-Host "WARNING: Installer returned non-zero exit code." -ForegroundColor Yellow
+        }
+    }
+
 
     Write-Progress `
         -Activity "Installing RustDesk" `
-        -Status "Waiting for installer..." `
+        -Status "Waiting for RustDesk.exe..." `
         -PercentComplete (
             [Math]::Min(
                 99,
@@ -558,68 +636,154 @@ Write-Progress `
     -Completed
 
 
-if (
-    -not $installerProcess.HasExited -and
-    (Test-Path -LiteralPath $RustDeskExe)
-) {
+if (-not $RustDeskDetected) {
 
     Write-Host ""
-    Write-Host "RustDesk executable detected."
-
-    Write-Host "Installer process is still running."
-    Write-Host "Continuing without waiting for installer process."
-
-}
-elseif (
-    -not $InstallerFinished
-) {
+    Write-Host "ERROR: RustDesk.exe did not appear after $InstallerTimeoutSeconds seconds." -ForegroundColor Red
 
     Write-Host ""
-    Write-Host "ERROR: RustDesk installer timed out after $InstallerTimeoutSeconds seconds." -ForegroundColor Red
-
-    Write-Host ""
-    Write-Host "Installer process:"
-    Write-Host "  PID: $($installerProcess.Id)"
-
-    try {
-
-        Stop-Process `
-            -Id $installerProcess.Id `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-    }
-    catch {}
+    Write-Host "Expected:"
+    Write-Host "  $RustDeskExe"
 
     exit 1
 }
 
+
+# ============================================================
+# WAIT FOR RustDesk.exe TO STABILIZE
+# ============================================================
+
+Write-Host ""
+Write-Host "Waiting for RustDesk.exe to finish writing..."
+
+
+$StableChecksRequired = 3
+$StableChecks = 0
+
+$LastLength = -1
+$LastWriteTime = [DateTime]::MinValue
+
+
+for ($i = 0; $i -lt 60; $i++) {
+
+    if (-not (Test-Path -LiteralPath $RustDeskExe)) {
+
+        $StableChecks = 0
+
+        Start-Sleep -Seconds 1
+
+        continue
+    }
+
+
+    try {
+
+        $file = Get-Item `
+            -LiteralPath $RustDeskExe `
+            -ErrorAction Stop
+
+        $CurrentLength = $file.Length
+        $CurrentWriteTime = $file.LastWriteTimeUtc
+
+
+        if (
+            $CurrentLength -eq $LastLength -and
+            $CurrentWriteTime -eq $LastWriteTime -and
+            $CurrentLength -gt 0
+        ) {
+
+            $StableChecks++
+
+        }
+        else {
+
+            $StableChecks = 0
+        }
+
+
+        $LastLength = $CurrentLength
+        $LastWriteTime = $CurrentWriteTime
+
+
+        Write-Progress `
+            -Activity "Waiting for RustDesk installation" `
+            -Status "File size: $CurrentLength bytes; stable checks: $StableChecks/$StableChecksRequired" `
+            -PercentComplete (
+                [Math]::Min(
+                    99,
+                    (($i + 1) / 60) * 100
+                )
+            )
+
+
+        if ($StableChecks -ge $StableChecksRequired) {
+
+            break
+        }
+
+    }
+    catch {
+
+        $StableChecks = 0
+    }
+
+
+    Start-Sleep -Seconds 1
+}
+
+
+Write-Progress `
+    -Activity "Waiting for RustDesk installation" `
+    -Completed
+
+
+if (
+    -not (Test-Path -LiteralPath $RustDeskExe) -or
+    $StableChecks -lt $StableChecksRequired
+) {
+
+    Write-Host ""
+    Write-Host "ERROR: RustDesk.exe did not stabilize." -ForegroundColor Red
+
+    exit 1
+}
+
+
+$installedExe = Get-Item `
+    -LiteralPath $RustDeskExe
+
+
+Write-Host ""
+Write-Host "RustDesk.exe is ready."
+
+Write-Host "Size:"
+Write-Host "  $($installedExe.Length) bytes"
+
+Write-Host "Last write:"
+Write-Host "  $($installedExe.LastWriteTime)"
+
+
+# ------------------------------------------------------------
+# Give installer additional time for service/files.
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "Waiting additional 3 seconds for installer finalization..."
 
 Start-Sleep -Seconds 3
 
 
 # ============================================================
-# VERIFY INSTALLATION
+# STOP AGAIN AFTER INSTALLATION
 # ============================================================
 
 Write-Host ""
-Write-Host "Checking RustDesk installation..."
+Write-Host "Stopping RustDesk again before configuration..."
 
-if (-not (Test-Path -LiteralPath $RustDeskExe)) {
 
-    Write-Host ""
-    Write-Host "ERROR: RustDesk.exe was not installed." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Expected:"
-    Write-Host "  $RustDeskExe"
-    Write-Host ""
-
+if (-not (Stop-RustDeskCompletely)) {
     exit 1
 }
-
-
-Write-Host "RustDesk.exe found:"
-Write-Host "  $RustDeskExe"
 
 
 # ============================================================
@@ -672,9 +836,44 @@ Write-Host "============================================================"
 Write-Host ""
 
 
-# ------------------------------------------------------------
+# ============================================================
+# SOURCE FILE INFORMATION
+# ============================================================
+
+$SourceFile = Get-Item `
+    -LiteralPath $ConfigSource `
+    -ErrorAction Stop
+
+
+if ($SourceFile.Length -eq 0) {
+
+    Write-Host ""
+    Write-Host "ERROR: Source RustDesk2.toml is empty." -ForegroundColor Red
+
+    exit 1
+}
+
+
+$SourceHash = (
+    Get-FileHash `
+        -LiteralPath $ConfigSource `
+        -Algorithm SHA256
+).Hash
+
+
+Write-Host "Source RustDesk2.toml:"
+Write-Host "  $ConfigSource"
+
+Write-Host "Source size:"
+Write-Host "  $($SourceFile.Length) bytes"
+
+Write-Host "Source SHA256:"
+Write-Host "  $SourceHash"
+
+
+# ============================================================
 # BACKUP USER CONFIG
-# ------------------------------------------------------------
+# ============================================================
 
 if (Test-Path -LiteralPath $UserConfig) {
 
@@ -685,14 +884,15 @@ if (Test-Path -LiteralPath $UserConfig) {
         -Destination $UserBackup `
         -Force
 
-    Write-Host "User backup:"
+    Write-Host ""
+    Write-Host "User backup created:"
     Write-Host "  $UserBackup"
 }
 
 
-# ------------------------------------------------------------
+# ============================================================
 # BACKUP SYSTEM CONFIG
-# ------------------------------------------------------------
+# ============================================================
 
 if (Test-Path -LiteralPath $SystemConfig) {
 
@@ -703,141 +903,256 @@ if (Test-Path -LiteralPath $SystemConfig) {
         -Destination $SystemBackup `
         -Force
 
-    Write-Host "System backup:"
+    Write-Host ""
+    Write-Host "System backup created:"
     Write-Host "  $SystemBackup"
 }
 
 
-# ------------------------------------------------------------
-# COPY USER CONFIG
-# ------------------------------------------------------------
+# ============================================================
+# FUNCTION:
+# INSTALL CONFIG SAFELY
+# ============================================================
 
-Copy-Item `
-    -LiteralPath $ConfigSource `
-    -Destination $UserConfig `
-    -Force
+function Install-ConfigFile {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
 
 
-# ------------------------------------------------------------
-# WAIT + VERIFY USER CONFIG
-# ------------------------------------------------------------
+    $DestinationDir = Split-Path `
+        -Parent `
+        $Destination
 
-$UserConfigReady = $false
 
-for ($i = 0; $i -lt 10; $i++) {
+    if (-not (Test-Path -LiteralPath $DestinationDir)) {
 
-    if (
-        (Test-Path -LiteralPath $UserConfig) -and
-        ((Get-Item -LiteralPath $UserConfig).Length -gt 0)
-    ) {
-
-        $UserConfigReady = $true
-        break
+        New-Item `
+            -Path $DestinationDir `
+            -ItemType Directory `
+            -Force |
+            Out-Null
     }
 
-    Start-Sleep -Milliseconds 500
+
+    # --------------------------------------------------------
+    # Create temporary file in the same directory.
+    # This avoids cross-volume replacement issues.
+    # --------------------------------------------------------
+
+    $TempConfig = Join-Path `
+        $DestinationDir `
+        "RustDesk2.toml.installing.$([Guid]::NewGuid().ToString('N')).tmp"
+
+
+    try {
+
+        Copy-Item `
+            -LiteralPath $Source `
+            -Destination $TempConfig `
+            -Force
+
+
+        # ----------------------------------------------------
+        # Verify temporary copy BEFORE replacing target.
+        # ----------------------------------------------------
+
+        if (-not (Test-Path -LiteralPath $TempConfig)) {
+
+            throw "Temporary configuration file was not created."
+        }
+
+
+        $TempFile = Get-Item `
+            -LiteralPath $TempConfig
+
+
+        if ($TempFile.Length -ne (Get-Item $Source).Length) {
+
+            throw "Temporary configuration size does not match source."
+        }
+
+
+        $TempHash = (
+            Get-FileHash `
+                -LiteralPath $TempConfig `
+                -Algorithm SHA256
+        ).Hash
+
+
+        if ($TempHash -ne $SourceHash) {
+
+            throw "Temporary configuration SHA256 does not match source."
+        }
+
+
+        # ----------------------------------------------------
+        # Remove old destination.
+        # ----------------------------------------------------
+
+        if (Test-Path -LiteralPath $Destination) {
+
+            Remove-Item `
+                -LiteralPath $Destination `
+                -Force
+        }
+
+
+        # ----------------------------------------------------
+        # Move verified file into final location.
+        # ----------------------------------------------------
+
+        Move-Item `
+            -LiteralPath $TempConfig `
+            -Destination $Destination `
+            -Force
+
+
+        # ----------------------------------------------------
+        # Verify final file.
+        # ----------------------------------------------------
+
+        if (-not (Test-Path -LiteralPath $Destination)) {
+
+            throw "Final configuration file does not exist."
+        }
+
+
+        $FinalFile = Get-Item `
+            -LiteralPath $Destination
+
+
+        if ($FinalFile.Length -ne (Get-Item $Source).Length) {
+
+            throw "Final configuration size does not match source."
+        }
+
+
+        $FinalHash = (
+            Get-FileHash `
+                -LiteralPath $Destination `
+                -Algorithm SHA256
+        ).Hash
+
+
+        if ($FinalHash -ne $SourceHash) {
+
+            throw "Final configuration SHA256 does not match source."
+        }
+
+
+        Write-Host ""
+        Write-Host "Configuration installed:"
+        Write-Host "  $Destination"
+
+        Write-Host "Size:"
+        Write-Host "  $($FinalFile.Length) bytes"
+
+        Write-Host "Last write:"
+        Write-Host "  $($FinalFile.LastWriteTime)"
+
+        Write-Host "SHA256:"
+        Write-Host "  $FinalHash"
+
+    }
+    finally {
+
+        if (Test-Path -LiteralPath $TempConfig) {
+
+            Remove-Item `
+                -LiteralPath $TempConfig `
+                -Force `
+                -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 
-if (-not $UserConfigReady) {
+# ============================================================
+# INSTALL USER CONFIG
+# ============================================================
+
+Install-ConfigFile `
+    -Source $ConfigSource `
+    -Destination $UserConfig
+
+
+# ============================================================
+# INSTALL SYSTEM CONFIG
+# ============================================================
+
+Install-ConfigFile `
+    -Source $ConfigSource `
+    -Destination $SystemConfig
+
+
+# ============================================================
+# VERIFY USER CONFIG CONTENT
+# ============================================================
+
+Write-Host ""
+Write-Host "Verifying user RustDesk2.toml content..."
+
+
+$UserConfigHash = (
+    Get-FileHash `
+        -LiteralPath $UserConfig `
+        -Algorithm SHA256
+).Hash
+
+
+if ($UserConfigHash -ne $SourceHash) {
 
     Write-Host ""
-    Write-Host "ERROR: User RustDesk2.toml was not created or is empty." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Expected:"
-    Write-Host "  $UserConfig"
+    Write-Host "ERROR: User RustDesk2.toml differs from source." -ForegroundColor Red
 
     exit 1
 }
 
 
+Write-Host "User RustDesk2.toml matches source."
+
+
+# ============================================================
+# VERIFY SYSTEM CONFIG CONTENT
+# ============================================================
+
 Write-Host ""
-Write-Host "User RustDesk2.toml installed:"
-Write-Host "  $UserConfig"
+Write-Host "Verifying system RustDesk2.toml content..."
 
 
-# ------------------------------------------------------------
-# COPY SYSTEM CONFIG
-# ------------------------------------------------------------
-
-Copy-Item `
-    -LiteralPath $ConfigSource `
-    -Destination $SystemConfig `
-    -Force
+$SystemConfigHash = (
+    Get-FileHash `
+        -LiteralPath $SystemConfig `
+        -Algorithm SHA256
+).Hash
 
 
-# ------------------------------------------------------------
-# WAIT + VERIFY SYSTEM CONFIG
-# ------------------------------------------------------------
-
-$SystemConfigReady = $false
-
-for ($i = 0; $i -lt 10; $i++) {
-
-    if (
-        (Test-Path -LiteralPath $SystemConfig) -and
-        ((Get-Item -LiteralPath $SystemConfig).Length -gt 0)
-    ) {
-
-        $SystemConfigReady = $true
-        break
-    }
-
-    Start-Sleep -Milliseconds 500
-}
-
-
-if (-not $SystemConfigReady) {
+if ($SystemConfigHash -ne $SourceHash) {
 
     Write-Host ""
-    Write-Host "ERROR: System RustDesk2.toml was not created or is empty." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Expected:"
-    Write-Host "  $SystemConfig"
+    Write-Host "ERROR: System RustDesk2.toml differs from source." -ForegroundColor Red
 
     exit 1
 }
 
 
-Write-Host ""
-Write-Host "System RustDesk2.toml installed:"
-Write-Host "  $SystemConfig"
+Write-Host "System RustDesk2.toml matches source."
 
 
-# ------------------------------------------------------------
-# VERIFY CONTENT BEFORE START
-# ------------------------------------------------------------
-
-Write-Host ""
-Write-Host "============================================================"
-Write-Host "VERIFYING CONFIG BEFORE RUSTDESK START"
-Write-Host "============================================================"
-Write-Host ""
-
-Write-Host "Source config:"
-Write-Host "  $ConfigSource"
-
-Write-Host ""
-Write-Host "User config:"
-Write-Host "  $UserConfig"
-
-Write-Host ""
-Write-Host "System config:"
-Write-Host "  $SystemConfig"
-
-Write-Host ""
-Write-Host "RustDesk2.toml is ready."
-
-
-# ------------------------------------------------------------
+# ============================================================
 # IMPORTANT:
-# Give Windows a moment before starting RustDesk.
-# ------------------------------------------------------------
+# DO NOT START RUSTDESK BEFORE CONFIG VERIFICATION
+# ============================================================
 
 Write-Host ""
-Write-Host "Waiting for configuration to settle..."
-
-Start-Sleep -Seconds 2
+Write-Host "RustDesk2.toml configuration is ready."
+Write-Host "RustDesk has NOT been started yet."
 
 
 # ============================================================
@@ -850,7 +1165,6 @@ Write-Host "[5/8] STARTING RUSTDESK"
 Write-Host "============================================================"
 Write-Host ""
 
-
 Write-Host "Starting RustDesk GUI..."
 
 
@@ -858,13 +1172,13 @@ Start-Process `
     -FilePath $RustDeskExe
 
 
-Write-Host "Waiting for RustDesk to initialize..."
+Write-Host "Waiting for RustDesk process..."
 
 
 $RustDeskRunning = $false
 
 
-for ($i = 0; $i -lt 20; $i++) {
+for ($i = 0; $i -lt 30; $i++) {
 
     Start-Sleep -Seconds 1
 
@@ -893,57 +1207,108 @@ if (-not $RustDeskRunning) {
 Write-Host "RustDesk process is running."
 
 
-Write-Host ""
-Write-Host "Waiting 5 seconds for RustDesk initialization..."
+# ------------------------------------------------------------
+# IMPORTANT:
+# Give RustDesk time to read RustDesk2.toml.
+# ------------------------------------------------------------
 
-Start-Sleep -Seconds 5
+Write-Host ""
+Write-Host "Waiting 8 seconds for RustDesk initialization..."
+
+Start-Sleep -Seconds 8
 
 
 # ============================================================
-# RE-APPLY CONFIG AFTER RUSTDESK STARTUP
+# CHECK CONFIG HAS NOT BEEN REPLACED
 # ============================================================
 
 Write-Host ""
-Write-Host "============================================================"
-Write-Host "RE-APPLYING RUSTDESK2.TOML AFTER STARTUP"
-Write-Host "============================================================"
-Write-Host ""
+Write-Host "Checking RustDesk2.toml after startup..."
 
 
-Copy-Item `
-    -LiteralPath $ConfigSource `
-    -Destination $UserConfig `
-    -Force
+$UserConfigAfterStart = Get-FileHash `
+    -LiteralPath $UserConfig `
+    -Algorithm SHA256
 
 
-Copy-Item `
-    -LiteralPath $ConfigSource `
-    -Destination $SystemConfig `
-    -Force
-
-
-Start-Sleep -Seconds 1
-
-
-if (-not (Test-Path -LiteralPath $UserConfig)) {
+if ($UserConfigAfterStart.Hash -ne $SourceHash) {
 
     Write-Host ""
-    Write-Host "ERROR: User RustDesk2.toml disappeared after RustDesk startup." -ForegroundColor Red
+    Write-Host "WARNING: RustDesk2.toml changed after RustDesk startup." -ForegroundColor Yellow
 
-    exit 1
-}
+    Write-Host "Re-applying configuration..."
 
 
-if (-not (Test-Path -LiteralPath $SystemConfig)) {
+    # --------------------------------------------------------
+    # Stop again.
+    # --------------------------------------------------------
+
+    if (-not (Stop-RustDeskCompletely)) {
+        exit 1
+    }
+
+
+    # --------------------------------------------------------
+    # Re-install config.
+    # --------------------------------------------------------
+
+    Install-ConfigFile `
+        -Source $ConfigSource `
+        -Destination $UserConfig
+
+    Install-ConfigFile `
+        -Source $ConfigSource `
+        -Destination $SystemConfig
+
 
     Write-Host ""
-    Write-Host "ERROR: System RustDesk2.toml disappeared after RustDesk startup." -ForegroundColor Red
+    Write-Host "Configuration re-applied successfully."
 
-    exit 1
+
+    # --------------------------------------------------------
+    # Start again.
+    # --------------------------------------------------------
+
+    Start-Process `
+        -FilePath $RustDeskExe
+
+
+    Write-Host "Waiting for RustDesk again..."
+
+    $RustDeskRunning = $false
+
+
+    for ($i = 0; $i -lt 30; $i++) {
+
+        Start-Sleep -Seconds 1
+
+        $rustDeskProcess = Get-Process `
+            -Name "RustDesk" `
+            -ErrorAction SilentlyContinue
+
+        if ($null -ne $rustDeskProcess) {
+
+            $RustDeskRunning = $true
+
+            break
+        }
+    }
+
+
+    if (-not $RustDeskRunning) {
+
+        Write-Host ""
+        Write-Host "ERROR: RustDesk did not restart." -ForegroundColor Red
+
+        exit 1
+    }
+
+
+    Write-Host ""
+    Write-Host "Waiting 8 seconds for second initialization..."
+
+    Start-Sleep -Seconds 8
 }
-
-
-Write-Host "RustDesk2.toml re-applied successfully."
 
 
 # ============================================================
@@ -987,84 +1352,41 @@ if ($passwordProcess.ExitCode -ne 0) {
 
 
 Write-Host ""
-Write-Host "Password applied successfully."
+Write-Host "Password command completed successfully."
 
 
 # ============================================================
-# RE-APPLY CONFIG AFTER PASSWORD
+# WAIT FOR PASSWORD CONFIG
 # ============================================================
 
 Write-Host ""
-Write-Host "============================================================"
-Write-Host "FINAL RUSTDESK2.TOML APPLY"
-Write-Host "============================================================"
-Write-Host ""
-
-
-Copy-Item `
-    -LiteralPath $ConfigSource `
-    -Destination $UserConfig `
-    -Force
-
-
-Copy-Item `
-    -LiteralPath $ConfigSource `
-    -Destination $SystemConfig `
-    -Force
-
-
-Start-Sleep -Seconds 1
-
-
-if (-not (Test-Path -LiteralPath $UserConfig)) {
-
-    Write-Host ""
-    Write-Host "ERROR: User RustDesk2.toml final verification failed." -ForegroundColor Red
-
-    exit 1
-}
-
-
-if (-not (Test-Path -LiteralPath $SystemConfig)) {
-
-    Write-Host ""
-    Write-Host "ERROR: System RustDesk2.toml final verification failed." -ForegroundColor Red
-
-    exit 1
-}
-
-
-Write-Host "Final RustDesk2.toml applied."
-
-
-# ============================================================
-# 7/8 VERIFY RustDesk.toml
-# ============================================================
-
-Write-Host ""
-Write-Host "============================================================"
-Write-Host "[7/8] VERIFYING RUSTDESK.TOML"
-Write-Host "============================================================"
-Write-Host ""
+Write-Host "Waiting for RustDesk.toml..."
 
 
 $UserPasswordConfigFound = $false
 
 
-for ($i = 0; $i -lt 15; $i++) {
+for ($i = 0; $i -lt 30; $i++) {
 
     if (Test-Path -LiteralPath $UserPasswordConfig) {
 
-        $file = Get-Item `
-            -LiteralPath $UserPasswordConfig
+        try {
 
-        if ($file.Length -gt 0) {
+            $file = Get-Item `
+                -LiteralPath $UserPasswordConfig `
+                -ErrorAction Stop
 
-            $UserPasswordConfigFound = $true
+            if ($file.Length -gt 0) {
 
-            break
+                $UserPasswordConfigFound = $true
+
+                break
+            }
+
         }
+        catch {}
     }
+
 
     Start-Sleep -Seconds 1
 }
@@ -1082,20 +1404,105 @@ if (-not $UserPasswordConfigFound) {
 }
 
 
+Write-Host ""
+Write-Host "User RustDesk.toml detected."
+
+
+# ============================================================
+# 7/8 VERIFY RustDesk.toml
+# ============================================================
+
+Write-Host ""
+Write-Host "============================================================"
+Write-Host "[7/8] VERIFYING RUSTDESK.TOML"
+Write-Host "============================================================"
+Write-Host ""
+
+
+# ------------------------------------------------------------
+# USER PASSWORD CONFIG
+# ------------------------------------------------------------
+
 $userPasswordFile = Get-Item `
     -LiteralPath $UserPasswordConfig
 
 
-Write-Host "User RustDesk.toml verified:"
+Write-Host "User RustDesk.toml:"
 Write-Host "  $UserPasswordConfig"
 
 Write-Host "Size:"
 Write-Host "  $($userPasswordFile.Length) bytes"
 
+Write-Host "Last write:"
+Write-Host "  $($userPasswordFile.LastWriteTime)"
+
+
+$userPasswordContent = Get-Content `
+    -LiteralPath $UserPasswordConfig `
+    -Raw `
+    -ErrorAction Stop
+
+
+if ([string]::IsNullOrWhiteSpace($userPasswordContent)) {
+
+    Write-Host ""
+    Write-Host "ERROR: RustDesk.toml is empty." -ForegroundColor Red
+
+    exit 1
+}
+
 
 # ------------------------------------------------------------
-# SYSTEM PASSWORD CONFIG
+# PASSWORD FIELD
 # ------------------------------------------------------------
+
+$HasPasswordField = $false
+$HasSaltField = $false
+
+
+if ($userPasswordContent -match "(?m)^\s*password\s*=") {
+    $HasPasswordField = $true
+}
+
+
+if ($userPasswordContent -match "(?m)^\s*salt\s*=") {
+    $HasSaltField = $true
+}
+
+
+Write-Host ""
+Write-Host "Password field:"
+Write-Host "  $HasPasswordField"
+
+Write-Host "Salt field:"
+Write-Host "  $HasSaltField"
+
+
+if (-not $HasPasswordField) {
+
+    Write-Host ""
+    Write-Host "ERROR: password field not found in RustDesk.toml." -ForegroundColor Red
+
+    exit 1
+}
+
+
+if (-not $HasSaltField) {
+
+    Write-Host ""
+    Write-Host "ERROR: salt field not found in RustDesk.toml." -ForegroundColor Red
+
+    exit 1
+}
+
+
+Write-Host ""
+Write-Host "Password configuration verified."
+
+
+# ============================================================
+# SYSTEM PASSWORD CONFIG
+# ============================================================
 
 if (Test-Path -LiteralPath $SystemPasswordConfig) {
 
@@ -1127,6 +1534,7 @@ Write-Host "Getting RustDesk ID..."
 
 $RustDeskId = ""
 
+
 try {
 
     $RustDeskId = (
@@ -1156,10 +1564,15 @@ $service = Get-Service `
     -ErrorAction SilentlyContinue
 
 
+# ------------------------------------------------------------
+# SERVICE DOES NOT EXIST
+# ------------------------------------------------------------
+
 if ($null -eq $service) {
 
     Write-Host "RustDesk service does not exist."
     Write-Host "Installing RustDesk service..."
+
 
     $installServiceProcess = Start-Process `
         -FilePath $RustDeskExe `
@@ -1169,17 +1582,44 @@ if ($null -eq $service) {
         -WindowStyle Hidden
 
 
+    Write-Host ""
     Write-Host "Service installer exit code:"
     Write-Host "  $($installServiceProcess.ExitCode)"
 
 
-    Start-Sleep -Seconds 3
+    if ($installServiceProcess.ExitCode -ne 0) {
+
+        Write-Host ""
+        Write-Host "WARNING: Service installer returned non-zero exit code." -ForegroundColor Yellow
+    }
 
 
-    $service = Get-Service `
-        -Name $ServiceName `
-        -ErrorAction SilentlyContinue
+    # --------------------------------------------------------
+    # Wait for service registration.
+    # --------------------------------------------------------
+
+    for ($i = 0; $i -lt 30; $i++) {
+
+        $service = Get-Service `
+            -Name $ServiceName `
+            -ErrorAction SilentlyContinue
+
+        if ($null -ne $service) {
+            break
+        }
+
+        Start-Sleep -Seconds 1
+    }
 }
+
+
+# ============================================================
+# VERIFY SERVICE EXISTS
+# ============================================================
+
+$service = Get-Service `
+    -Name $ServiceName `
+    -ErrorAction SilentlyContinue
 
 
 if ($null -eq $service) {
@@ -1191,6 +1631,14 @@ if ($null -eq $service) {
 }
 
 
+Write-Host ""
+Write-Host "RustDesk service found."
+
+
+# ============================================================
+# START SERVICE
+# ============================================================
+
 if ($service.Status -ne "Running") {
 
     Write-Host "Starting RustDesk service..."
@@ -1200,6 +1648,10 @@ if ($service.Status -ne "Running") {
         -ErrorAction Stop
 }
 
+
+# ============================================================
+# WAIT FOR SERVICE
+# ============================================================
 
 $ServiceRunning = $false
 
@@ -1239,6 +1691,7 @@ if (-not $ServiceRunning) {
 }
 
 
+Write-Host ""
 Write-Host "RustDesk service is RUNNING."
 
 
@@ -1264,6 +1717,60 @@ if ($null -eq $guiProcess) {
 else {
 
     Write-Host "RustDesk GUI is RUNNING."
+}
+
+
+# ============================================================
+# FINAL CONFIG VERIFICATION
+# ============================================================
+
+Write-Host ""
+Write-Host "Final RustDesk2.toml verification..."
+
+
+if (-not (Test-Path -LiteralPath $UserConfig)) {
+
+    Write-Host ""
+    Write-Host "ERROR: Final user RustDesk2.toml is missing." -ForegroundColor Red
+
+    exit 1
+}
+
+
+$FinalConfigFile = Get-Item `
+    -LiteralPath $UserConfig
+
+
+$FinalConfigHash = (
+    Get-FileHash `
+        -LiteralPath $UserConfig `
+        -Algorithm SHA256
+).Hash
+
+
+Write-Host "Final user RustDesk2.toml:"
+Write-Host "  $UserConfig"
+
+Write-Host "Size:"
+Write-Host "  $($FinalConfigFile.Length) bytes"
+
+Write-Host "Last write:"
+Write-Host "  $($FinalConfigFile.LastWriteTime)"
+
+Write-Host "SHA256:"
+Write-Host "  $FinalConfigHash"
+
+
+if ($FinalConfigHash -ne $SourceHash) {
+
+    Write-Host ""
+    Write-Host "WARNING: RustDesk2.toml differs from installation source." -ForegroundColor Yellow
+
+}
+else {
+
+    Write-Host ""
+    Write-Host "RustDesk2.toml still matches source."
 }
 
 
@@ -1303,7 +1810,7 @@ else {
 
 Write-Host ""
 Write-Host "User:"
-Write-Host "  $RealUserName"
+Write-Host "  $OriginalUserName"
 
 
 Write-Host ""
@@ -1332,9 +1839,12 @@ Write-Host "  $RustDeskPassword"
 
 
 if ($PasswordGenerated) {
+
     Write-Host "  (randomly generated)"
+
 }
 else {
+
     Write-Host "  (provided by user)"
 }
 
@@ -1350,7 +1860,17 @@ Get-Service `
 
 Write-Host ""
 Write-Host "GUI:"
-Write-Host "  RUNNING"
+
+if ($null -ne $guiProcess) {
+
+    Write-Host "  RUNNING"
+
+}
+else {
+
+    Write-Host "  NOT DETECTED"
+
+}
 
 
 Write-Host ""
