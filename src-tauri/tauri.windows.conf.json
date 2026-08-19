@@ -6,7 +6,10 @@
     "bundle": {
         "active": false,
         "resources": [
-            "resources/windows"
+            "resources/windows/install.ps1",
+            "resources/windows/RustDesk2.toml",
+            "resources/windows/rustdesk-aarch64.exe",
+            "resources/windows/rustdesk-x86_64.exe"
         ]
     }
 }

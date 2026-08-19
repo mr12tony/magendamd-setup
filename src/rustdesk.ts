@@ -1,8 +1,8 @@
 import { Command } from "@tauri-apps/plugin-shell";
 import { platform } from "@tauri-apps/plugin-os";
-import { exists } from "@tauri-apps/plugin-fs";
+// import { exists } from "@tauri-apps/plugin-fs";
 import { getRustDeskPath } from "./os/rustdesk-path";
-import { sleep } from "./sleep";
+// import { sleep } from "./sleep";
 
 export async function isRustDeskInstalled(): Promise<boolean> {
   return (await getRustDeskPath()) !== null;
@@ -123,15 +123,52 @@ export async function getRustDeskId(): Promise<string | null> {
 export async function openRustDesk(): Promise<void> {
   const os = platform();
 
+  // if (os === "macos") {
+  //   const result = await Command.create("rustdesk-macos").execute();
+
+  //   if (result.code !== 0) {
+  //     throw new Error(result.stderr || "Failed to open RustDesk");
+  //   }
+
+  //   return;
+  // }
+
   if (os === "macos") {
-    const result = await Command.create("rustdesk-macos").execute();
+    const result = await Command.create("open", ["-a", "RustDesk"]).execute();
 
     if (result.code !== 0) {
-      throw new Error(result.stderr || "Failed to open RustDesk");
+      throw new Error(
+        result.stderr || result.stdout || "Failed to open RustDesk",
+      );
     }
 
     return;
   }
+
+  // if (os === "windows") {
+  //   const path = await getRustDeskPath();
+
+  //   if (!path) {
+  //     throw new Error("RustDesk is not installed");
+  //   }
+
+  //   const psCommand = `Start-Process -FilePath '${path.replace(/'/g, "''")}'`;
+
+  //   const result = await Command.create("powershell", [
+  //     "-NoProfile",
+  //     "-NonInteractive",
+  //     "-Command",
+  //     psCommand,
+  //   ]).execute();
+
+  //   if (result.code !== 0) {
+  //     throw new Error(
+  //       result.stderr || result.stdout || "Failed to open RustDesk",
+  //     );
+  //   }
+
+  //   return;
+  // }
 
   if (os === "windows") {
     const path = await getRustDeskPath();
@@ -140,7 +177,32 @@ export async function openRustDesk(): Promise<void> {
       throw new Error("RustDesk is not installed");
     }
 
-    const psCommand = `Start-Process -FilePath '${path.replace(/'/g, "''")}'`;
+    const psCommand = `
+      Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public class WindowHelper {
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+"@
+
+      $process = Get-Process -Name "RustDesk" -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowHandle -ne 0 } |
+        Select-Object -First 1
+
+      if ($process) {
+          [WindowHelper]::ShowWindow($process.MainWindowHandle, 9)
+          [WindowHelper]::SetForegroundWindow($process.MainWindowHandle)
+          exit 0
+      }
+
+      Start-Process -FilePath '${path.replace(/'/g, "''")}'
+    `;
 
     const result = await Command.create("powershell", [
       "-NoProfile",
@@ -171,60 +233,60 @@ export async function openRustDesk(): Promise<void> {
 //   }
 // }
 
-const RUSTDESK_APP_PATH = "/Applications/RustDesk.app";
+// const RUSTDESK_APP_PATH = "/Applications/RustDesk.app";
 
-export async function killRustDeskMacOS(): Promise<void> {
-  try {
-    const result = await Command.create("killall", ["RustDesk"]).execute();
+// export async function killRustDeskMacOS(): Promise<void> {
+//   try {
+//     const result = await Command.create("killall", ["RustDesk"]).execute();
 
-    if (result.code !== 0 && result.code !== 1) {
-      throw new Error(
-        result.stderr || `killall exited with code ${result.code}`,
-      );
-    }
+//     if (result.code !== 0 && result.code !== 1) {
+//       throw new Error(
+//         result.stderr || `killall exited with code ${result.code}`,
+//       );
+//     }
 
-    console.log("RustDesk stopped");
-  } catch (error) {
-    console.log("RustDesk was not running:", error);
-  }
-}
+//     console.log("RustDesk stopped");
+//   } catch (error) {
+//     console.log("RustDesk was not running:", error);
+//   }
+// }
 
-export async function restartRustDeskMacOS(): Promise<void> {
-  await killRustDeskMacOS();
-  await sleep(500);
+// export async function restartRustDeskMacOS(): Promise<void> {
+//   await killRustDeskMacOS();
+//   await sleep(500);
 
-  const openResult = await Command.create("open", [
-    "-n",
-    RUSTDESK_APP_PATH,
-  ]).execute();
+//   const openResult = await Command.create("open", [
+//     "-n",
+//     RUSTDESK_APP_PATH,
+//   ]).execute();
 
-  if (openResult.code !== 0) {
-    throw new Error(openResult.stderr || "Failed to start RustDesk");
-  }
+//   if (openResult.code !== 0) {
+//     throw new Error(openResult.stderr || "Failed to start RustDesk");
+//   }
 
-  console.log("RustDesk restarted");
-}
+//   console.log("RustDesk restarted");
+// }
 
-const RUSTDESK_WINDOWS_PATH = "C:\\Program Files\\RustDesk\\RustDesk.exe";
+// const RUSTDESK_WINDOWS_PATH = "C:\\Program Files\\RustDesk\\RustDesk.exe";
 
-export async function killRustDeskWindows(): Promise<void> {
-  try {
-    const result = await Command.create("taskkill", [
-      "/F",
-      "/IM",
-      "RustDesk.exe",
-    ]).execute();
+// export async function killRustDeskWindows(): Promise<void> {
+//   try {
+//     const result = await Command.create("taskkill", [
+//       "/F",
+//       "/IM",
+//       "RustDesk.exe",
+//     ]).execute();
 
-    console.log("RustDesk taskkill:", result.code);
-    console.log("stdout:", result.stdout);
-    console.log("stderr:", result.stderr);
+//     console.log("RustDesk taskkill:", result.code);
+//     console.log("stdout:", result.stdout);
+//     console.log("stderr:", result.stderr);
 
-    // ERRORLEVEL 128/1 может означать, что процесса не было.
-    // Поэтому отсутствие процесса не считаем ошибкой.
-  } catch (error) {
-    console.log("RustDesk was not running:", error);
-  }
-}
+//     // ERRORLEVEL 128/1 может означать, что процесса не было.
+//     // Поэтому отсутствие процесса не считаем ошибкой.
+//   } catch (error) {
+//     console.log("RustDesk was not running:", error);
+//   }
+// }
 
 // export async function restartRustDeskWindows(): Promise<void> {
 //   await killRustDeskWindows();
@@ -243,66 +305,66 @@ export async function killRustDeskWindows(): Promise<void> {
 //   console.log("RustDesk restarted");
 // }
 
-export async function restartRustDeskWindows(): Promise<void> {
-  await killRustDeskWindows();
-  await sleep(1000);
+// export async function restartRustDeskWindows(): Promise<void> {
+//   await killRustDeskWindows();
+//   await sleep(1000);
 
-  const psCommand =
-    `Start-Process ` +
-    `-FilePath '${RUSTDESK_WINDOWS_PATH.replace(/'/g, "''")}'`;
+//   const psCommand =
+//     `Start-Process ` +
+//     `-FilePath '${RUSTDESK_WINDOWS_PATH.replace(/'/g, "''")}'`;
 
-  const result = await Command.create("powershell", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    psCommand,
-  ]).execute();
+//   const result = await Command.create("powershell", [
+//     "-NoProfile",
+//     "-NonInteractive",
+//     "-Command",
+//     psCommand,
+//   ]).execute();
 
-  console.log("RustDesk start:", result.code);
-  console.log("stdout:", result.stdout);
-  console.log("stderr:", result.stderr);
+//   console.log("RustDesk start:", result.code);
+//   console.log("stdout:", result.stdout);
+//   console.log("stderr:", result.stderr);
 
-  if (result.code !== 0) {
-    throw new Error(result.stderr || "Failed to start RustDesk");
-  }
-}
+//   if (result.code !== 0) {
+//     throw new Error(result.stderr || "Failed to start RustDesk");
+//   }
+// }
 
-export async function killRustDesk(): Promise<void> {
-  const os = platform();
+// export async function killRustDesk(): Promise<void> {
+//   const os = platform();
 
-  if (os === "macos") {
-    return killRustDeskMacOS();
-  }
+//   if (os === "macos") {
+//     return killRustDeskMacOS();
+//   }
 
-  if (os === "windows") {
-    return killRustDeskWindows();
-  }
+//   if (os === "windows") {
+//     return killRustDeskWindows();
+//   }
 
-  throw new Error(`Unsupported platform: ${os}`);
-}
+//   throw new Error(`Unsupported platform: ${os}`);
+// }
 
-export async function restartRustDesk(): Promise<void> {
-  const os = platform();
+// export async function restartRustDesk(): Promise<void> {
+//   const os = platform();
 
-  if (os === "macos") {
-    return restartRustDeskMacOS();
-  }
+//   if (os === "macos") {
+//     return restartRustDeskMacOS();
+//   }
 
-  if (os === "windows") {
-    return restartRustDeskWindows();
-  }
+//   if (os === "windows") {
+//     return restartRustDeskWindows();
+//   }
 
-  throw new Error(`Unsupported platform: ${os}`);
-}
+//   throw new Error(`Unsupported platform: ${os}`);
+// }
 
-export async function waitForRustDesk(): Promise<void> {
-  for (let i = 0; i < 30; i++) {
-    if (await exists(RUSTDESK_WINDOWS_PATH)) {
-      return;
-    }
+// export async function waitForRustDesk(): Promise<void> {
+//   for (let i = 0; i < 30; i++) {
+//     if (await exists(RUSTDESK_WINDOWS_PATH)) {
+//       return;
+//     }
 
-    await sleep(1000);
-  }
+//     await sleep(1000);
+//   }
 
-  throw new Error("RustDesk.exe was not found");
-}
+//   throw new Error("RustDesk.exe was not found");
+// }

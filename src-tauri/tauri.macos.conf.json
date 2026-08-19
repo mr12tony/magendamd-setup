@@ -8,7 +8,10 @@
             "app"
         ],
         "resources": [
-            "resources/macos"
+            "resources/macos/install.sh",
+            "resources/macos/RustDesk2.toml",
+            "resources/macos/rustdesk-aarch64.dmg",
+            "resources/macos/rustdesk-x86_64.dmg"
         ]
     }
 }

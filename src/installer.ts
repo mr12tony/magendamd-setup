@@ -4,11 +4,7 @@ import { platform } from "@tauri-apps/plugin-os";
 // import { exists } from "@tauri-apps/plugin-fs";
 import { debugLog } from "./debugLog";
 // import { sleep } from "./sleep";
-
-type AppConfig = {
-  config: string;
-  password: string;
-};
+import type { AppConfig } from "./getAppConfig";
 
 export const RUSTDESK_WINDOWS_PATH =
   "C:\\Program Files\\RustDesk\\RustDesk.exe";

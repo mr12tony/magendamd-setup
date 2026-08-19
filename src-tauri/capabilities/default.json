@@ -110,6 +110,15 @@
           "name": "bash",
           "cmd": "/bin/bash",
           "args": true
+        },
+        {
+          "name": "open",
+          "cmd": "open",
+          "args": [
+            {
+              "validator": "^(?:-a|RustDesk)$"
+            }
+          ]
         }
       ]
     }
