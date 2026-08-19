@@ -145,31 +145,6 @@ export async function openRustDesk(): Promise<void> {
     return;
   }
 
-  // if (os === "windows") {
-  //   const path = await getRustDeskPath();
-
-  //   if (!path) {
-  //     throw new Error("RustDesk is not installed");
-  //   }
-
-  //   const psCommand = `Start-Process -FilePath '${path.replace(/'/g, "''")}'`;
-
-  //   const result = await Command.create("powershell", [
-  //     "-NoProfile",
-  //     "-NonInteractive",
-  //     "-Command",
-  //     psCommand,
-  //   ]).execute();
-
-  //   if (result.code !== 0) {
-  //     throw new Error(
-  //       result.stderr || result.stdout || "Failed to open RustDesk",
-  //     );
-  //   }
-
-  //   return;
-  // }
-
   if (os === "windows") {
     const path = await getRustDeskPath();
 
@@ -177,32 +152,7 @@ export async function openRustDesk(): Promise<void> {
       throw new Error("RustDesk is not installed");
     }
 
-    const psCommand = `
-      Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-
-public class WindowHelper {
-    [DllImport("user32.dll")]
-    public static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-}
-"@
-
-      $process = Get-Process -Name "RustDesk" -ErrorAction SilentlyContinue |
-        Where-Object { $_.MainWindowHandle -ne 0 } |
-        Select-Object -First 1
-
-      if ($process) {
-          [WindowHelper]::ShowWindow($process.MainWindowHandle, 9)
-          [WindowHelper]::SetForegroundWindow($process.MainWindowHandle)
-          exit 0
-      }
-
-      Start-Process -FilePath '${path.replace(/'/g, "''")}'
-    `;
+    const psCommand = `Start-Process -FilePath '${path.replace(/'/g, "''")}'`;
 
     const result = await Command.create("powershell", [
       "-NoProfile",
@@ -219,6 +169,56 @@ public class WindowHelper {
 
     return;
   }
+
+//   if (os === "windows") {
+//     const path = await getRustDeskPath();
+
+//     if (!path) {
+//       throw new Error("RustDesk is not installed");
+//     }
+
+//     const psCommand = `
+//       Add-Type @"
+// using System;
+// using System.Runtime.InteropServices;
+
+// public class WindowHelper {
+//     [DllImport("user32.dll")]
+//     public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+//     [DllImport("user32.dll")]
+//     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+// }
+// "@
+
+//       $process = Get-Process -Name "RustDesk" -ErrorAction SilentlyContinue |
+//         Where-Object { $_.MainWindowHandle -ne 0 } |
+//         Select-Object -First 1
+
+//       if ($process) {
+//           [WindowHelper]::ShowWindow($process.MainWindowHandle, 9)
+//           [WindowHelper]::SetForegroundWindow($process.MainWindowHandle)
+//           exit 0
+//       }
+
+//       Start-Process -FilePath '${path.replace(/'/g, "''")}'
+//     `;
+
+//     const result = await Command.create("powershell", [
+//       "-NoProfile",
+//       "-NonInteractive",
+//       "-Command",
+//       psCommand,
+//     ]).execute();
+
+//     if (result.code !== 0) {
+//       throw new Error(
+//         result.stderr || result.stdout || "Failed to open RustDesk",
+//       );
+//     }
+
+//     return;
+//   }
 
   throw new Error(`Unsupported OS: ${os}`);
 }
