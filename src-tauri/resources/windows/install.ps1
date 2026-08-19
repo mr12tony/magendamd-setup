@@ -1506,13 +1506,22 @@ Write-Host "Password configuration verified."
 # SYSTEM PASSWORD CONFIG
 # ============================================================
 
+Write-Host ""
+Write-Host "Copying RustDesk.toml to System config for permanent unattended access..."
+
+# Копируем файл с паролем и солью в системную директорию службы
+Copy-Item `
+    -LiteralPath $UserPasswordConfig `
+    -Destination $SystemPasswordConfig `
+    -Force
+
 if (Test-Path -LiteralPath $SystemPasswordConfig) {
 
     $systemPasswordFile = Get-Item `
         -LiteralPath $SystemPasswordConfig
 
     Write-Host ""
-    Write-Host "System RustDesk.toml found:"
+    Write-Host "System RustDesk.toml found (copied successfully):"
     Write-Host "  $SystemPasswordConfig"
 
     Write-Host "Size:"
@@ -1522,7 +1531,8 @@ if (Test-Path -LiteralPath $SystemPasswordConfig) {
 else {
 
     Write-Host ""
-    Write-Host "WARNING: System RustDesk.toml was not found." -ForegroundColor Yellow
+    Write-Host "ERROR: Failed to copy System RustDesk.toml." -ForegroundColor Red
+    exit 1
 }
 
 
