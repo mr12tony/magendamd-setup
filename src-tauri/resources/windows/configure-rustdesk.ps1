@@ -1,16 +1,16 @@
 $ErrorActionPreference = "Stop"
 
 # ============================================================
-# CONFIG
+# CONFIGURATION
 # ============================================================
 
 $TargetVersion = "1.4.9"
 
-# Export Server Config из RustDesk
+# Вставь сюда Export Server Config из RustDesk.
 $RustDeskConfig = "=0nI9MWTLBXTuZjQ6FDUttmN1V3Q3U0QKhmSBBla2EWQ5gFUN50ZrV2byATaMtiI6ISeltmIsIiI6ISawFmIsISbvNmLk1WYk5WZnFWbus2clRGdzVnciojI5FGblJnIsISbvNmLk1WYk5WZnFWbus2clRGdzVnciojI0N3boJye"
 
-# Для первого теста можно оставить фиксированный.
-# В production лучше не хранить пароль прямо в скрипте.
+# Для тестов.
+# В production лучше не хранить пароль прямо в .ps1.
 $RustDeskPassword = "TestPassword123!"
 
 $ServiceName = "Rustdesk"
@@ -28,7 +28,7 @@ $Arm64Installer = Join-Path `
 
 
 # ============================================================
-# LOG
+# LOGGING
 # ============================================================
 
 function Log {
@@ -36,7 +36,6 @@ function Log {
 
     Write-Host "[RustDesk deployment] $Message"
 }
-
 
 function Fail {
     param([string]$Message)
@@ -69,13 +68,9 @@ function Test-Administrator {
 # ============================================================
 # VERSION NORMALIZATION
 #
-# RustDesk 1.4.9 binary у тебя показывает:
+# Example:
 #
-#   1.4.9+67
-#
-# Для deployment сравниваем только:
-#
-#   1.4.9
+# 1.4.9+67 -> 1.4.9
 # ============================================================
 
 function Normalize-RustDeskVersion {
@@ -98,57 +93,34 @@ function Normalize-RustDeskVersion {
 
 
 # ============================================================
-# FIND RUSTDESK
+# FIND INSTALLED RUSTDESK
 # ============================================================
 
 function Find-RustDeskExe {
 
     $paths = New-Object System.Collections.Generic.List[string]
 
-
-    # --------------------------------------------------------
-    # Особенно важно из 32-bit installer context.
-    # --------------------------------------------------------
-
+    # Important for 32-bit installer context on x64 Windows.
     if (-not [string]::IsNullOrWhiteSpace($env:ProgramW6432)) {
-
         $paths.Add(
-            (Join-Path `
-                $env:ProgramW6432 `
-                "RustDesk\rustdesk.exe")
+            (Join-Path $env:ProgramW6432 "RustDesk\rustdesk.exe")
         )
     }
-
 
     if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
-
         $paths.Add(
-            (Join-Path `
-                $env:ProgramFiles `
-                "RustDesk\rustdesk.exe")
+            (Join-Path $env:ProgramFiles "RustDesk\rustdesk.exe")
         )
     }
-
 
     if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
-
         $paths.Add(
-            (Join-Path `
-                ${env:ProgramFiles(x86)} `
-                "RustDesk\rustdesk.exe")
+            (Join-Path ${env:ProgramFiles(x86)} "RustDesk\rustdesk.exe")
         )
     }
 
-
-    # Fallback
-    $paths.Add(
-        "C:\Program Files\RustDesk\rustdesk.exe"
-    )
-
-    $paths.Add(
-        "C:\Program Files (x86)\RustDesk\rustdesk.exe"
-    )
-
+    $paths.Add("C:\Program Files\RustDesk\rustdesk.exe")
+    $paths.Add("C:\Program Files (x86)\RustDesk\rustdesk.exe")
 
     foreach ($path in ($paths | Select-Object -Unique)) {
 
@@ -160,16 +132,11 @@ function Find-RustDeskExe {
         }
     }
 
-
-    # --------------------------------------------------------
     # Registry fallback
-    # --------------------------------------------------------
-
     $registryRoots = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
     )
-
 
     foreach ($root in $registryRoots) {
 
@@ -184,7 +151,6 @@ function Find-RustDeskExe {
                 }
             )
 
-
             foreach ($entry in $entries) {
 
                 if (
@@ -196,7 +162,6 @@ function Find-RustDeskExe {
                     $candidate = Join-Path `
                         $entry.InstallLocation `
                         "rustdesk.exe"
-
 
                     if (Test-Path -LiteralPath $candidate) {
 
@@ -210,13 +175,12 @@ function Find-RustDeskExe {
         catch {}
     }
 
-
     return $null
 }
 
 
 # ============================================================
-# VERSION
+# GET INSTALLED VERSION
 # ============================================================
 
 function Get-RustDeskVersion {
@@ -226,15 +190,9 @@ function Get-RustDeskVersion {
         [string]$Exe
     )
 
-
     if (-not (Test-Path -LiteralPath $Exe)) {
         return $null
     }
-
-
-    # --------------------------------------------------------
-    # ProductVersion
-    # --------------------------------------------------------
 
     try {
 
@@ -242,14 +200,11 @@ function Get-RustDeskVersion {
             $Exe
         )
 
-
         Log "ProductVersion raw: [$($info.ProductVersion)]"
         Log "FileVersion raw:    [$($info.FileVersion)]"
 
-
         $version = Normalize-RustDeskVersion `
             $info.ProductVersion
-
 
         if ($version) {
 
@@ -258,10 +213,8 @@ function Get-RustDeskVersion {
             return $version
         }
 
-
         $version = Normalize-RustDeskVersion `
             $info.FileVersion
-
 
         if ($version) {
 
@@ -275,16 +228,11 @@ function Get-RustDeskVersion {
         Log "File version check failed: $($_.Exception.Message)"
     }
 
-
-    # --------------------------------------------------------
     # Registry fallback
-    # --------------------------------------------------------
-
     $registryRoots = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
     )
-
 
     foreach ($root in $registryRoots) {
 
@@ -298,14 +246,12 @@ function Get-RustDeskVersion {
                 } |
                 Select-Object -First 1
 
-
             if ($entry -and $entry.DisplayVersion) {
 
                 Log "Registry DisplayVersion raw: [$($entry.DisplayVersion)]"
 
                 $version = Normalize-RustDeskVersion `
                     $entry.DisplayVersion
-
 
                 if ($version) {
 
@@ -318,13 +264,12 @@ function Get-RustDeskVersion {
         catch {}
     }
 
-
     return $null
 }
 
 
 # ============================================================
-# ARCH
+# ARCHITECTURE
 # ============================================================
 
 function Get-RustDeskInstaller {
@@ -332,10 +277,8 @@ function Get-RustDeskInstaller {
     $arch = $env:PROCESSOR_ARCHITECTURE
     $wowArch = $env:PROCESSOR_ARCHITEW6432
 
-
     Log "PROCESSOR_ARCHITECTURE = $arch"
     Log "PROCESSOR_ARCHITEW6432 = $wowArch"
-
 
     if (
         $arch -eq "ARM64" -or
@@ -352,7 +295,6 @@ function Get-RustDeskInstaller {
         return $Arm64Installer
     }
 
-
     if (
         $arch -eq "AMD64" -or
         $wowArch -eq "AMD64"
@@ -368,13 +310,12 @@ function Get-RustDeskInstaller {
         return $X64Installer
     }
 
-
     Fail "Unsupported architecture: $arch / $wowArch"
 }
 
 
 # ============================================================
-# SERVICE PID
+# RUSTDESK SERVICE PID
 # ============================================================
 
 function Get-RustDeskServicePid {
@@ -385,7 +326,6 @@ function Get-RustDeskServicePid {
             Win32_Service `
             -Filter "Name='$ServiceName'" `
             -ErrorAction SilentlyContinue
-
 
         if (
             $service -and
@@ -398,34 +338,29 @@ function Get-RustDeskServicePid {
     }
     catch {}
 
-
     return $null
 }
 
 
 # ============================================================
-# STOP GUI ONLY
+# CLOSE USER GUI ONLY
 # ============================================================
 
 function Stop-RustDeskGui {
 
     Log "Checking RustDesk GUI..."
 
-
     $servicePid = Get-RustDeskServicePid
-
 
     if ($servicePid) {
         Log "RustDesk Service PID: $servicePid"
     }
-
 
     $processes = @(
         Get-Process `
             -Name "rustdesk" `
             -ErrorAction SilentlyContinue
     )
-
 
     $guiProcesses = @(
         $processes |
@@ -438,12 +373,10 @@ function Stop-RustDeskGui {
                 return $false
             }
 
-
-            # Не трогаем Session 0 / service-side process.
+            # Service lives in Session 0.
             return $_.SessionId -ne 0
         }
     )
-
 
     if ($guiProcesses.Count -eq 0) {
 
@@ -452,7 +385,6 @@ function Stop-RustDeskGui {
         return
     }
 
-
     foreach ($process in $guiProcesses) {
 
         Log (
@@ -460,8 +392,7 @@ function Stop-RustDeskGui {
             "PID=$($process.Id), Session=$($process.SessionId)"
         )
 
-
-        # Graceful close.
+        # Graceful close first.
         try {
 
             if ($process.MainWindowHandle -ne 0) {
@@ -476,12 +407,9 @@ function Stop-RustDeskGui {
         }
         catch {}
 
-
-        # Проверяем, остался ли процесс.
         $remaining = Get-Process `
             -Id $process.Id `
             -ErrorAction SilentlyContinue
-
 
         if ($remaining) {
 
@@ -494,16 +422,10 @@ function Stop-RustDeskGui {
         }
     }
 
-
     Start-Sleep -Milliseconds 750
 
-
-    # --------------------------------------------------------
-    # Verification
-    # --------------------------------------------------------
-
+    # Verify
     $servicePid = Get-RustDeskServicePid
-
 
     $remainingGui = @(
         Get-Process `
@@ -522,7 +444,6 @@ function Stop-RustDeskGui {
         }
     )
 
-
     if ($remainingGui.Count -gt 0) {
 
         foreach ($process in $remainingGui) {
@@ -533,17 +454,15 @@ function Stop-RustDeskGui {
             )
         }
 
-
         Fail "RustDesk GUI could not be stopped."
     }
-
 
     Log "RustDesk GUI stopped."
 }
 
 
 # ============================================================
-# WAIT INSTALL RESULT
+# WAIT FOR INSTALLED VERSION
 # ============================================================
 
 function Wait-ForRustDeskInstallation {
@@ -553,12 +472,10 @@ function Wait-ForRustDeskInstallation {
         [System.Diagnostics.Process]$InstallerProcess
     )
 
-
     Log (
         "Waiting for RustDesk $TargetVersion " +
         "(timeout ${InstallTimeoutSeconds}s)..."
     )
-
 
     for (
         $second = 1;
@@ -568,19 +485,16 @@ function Wait-ForRustDeskInstallation {
 
         $exe = Find-RustDeskExe
 
-
         if ($exe) {
 
             $version = Get-RustDeskVersion `
                 -Exe $exe
-
 
             Log (
                 "[$second/$InstallTimeoutSeconds] " +
                 "Detected version: [$version], " +
                 "expected: [$TargetVersion]"
             )
-
 
             if ($version -eq $TargetVersion) {
 
@@ -600,14 +514,11 @@ function Wait-ForRustDeskInstallation {
             }
         }
 
-
-        # Installer diagnostics only every 5 sec.
         if (($second % 5) -eq 0) {
 
             try {
 
                 $InstallerProcess.Refresh()
-
 
                 if ($InstallerProcess.HasExited) {
 
@@ -627,17 +538,15 @@ function Wait-ForRustDeskInstallation {
             catch {}
         }
 
-
         Start-Sleep -Seconds 1
     }
-
 
     return $null
 }
 
 
 # ============================================================
-# STOP INSTALLER IF IT REMAINS ALIVE
+# STOP HANGING INSTALLER
 # ============================================================
 
 function Stop-HangingInstaller {
@@ -647,30 +556,27 @@ function Stop-HangingInstaller {
         [System.Diagnostics.Process]$InstallerProcess
     )
 
-
     try {
 
         $InstallerProcess.Refresh()
 
-
         if (-not $InstallerProcess.HasExited) {
 
             Log (
-                "RustDesk already installed, but installer " +
+                "RustDesk is installed, but installer " +
                 "PID $($InstallerProcess.Id) is still running."
             )
 
+            Log "Stopping hanging installer process..."
 
             Stop-Process `
                 -Id $InstallerProcess.Id `
                 -Force `
                 -ErrorAction SilentlyContinue
 
-
             Start-Sleep -Milliseconds 500
 
-
-            Log "Hanging installer process stopped."
+            Log "Hanging installer stopped."
         }
         else {
 
@@ -698,38 +604,28 @@ function Install-Or-Update-RustDesk {
 
     $existingExe = Find-RustDeskExe
 
-
-    # --------------------------------------------------------
-    # Existing RustDesk
-    # --------------------------------------------------------
-
     if ($existingExe) {
 
         $installedVersion = Get-RustDeskVersion `
             -Exe $existingExe
 
-
         Log "Installed RustDesk: $existingExe"
         Log "Installed version: [$installedVersion]"
         Log "Required version:  [$TargetVersion]"
 
-
         if ($installedVersion -eq $TargetVersion) {
 
-            Log "Correct RustDesk version is already installed."
-            Log "Skipping RustDesk installation."
+            Log "Correct RustDesk version already installed."
+            Log "Skipping installation."
 
             return $existingExe
         }
-
 
         Log (
             "Version mismatch: " +
             "$installedVersion -> $TargetVersion"
         )
 
-
-        # GUI закрываем перед upgrade/downgrade.
         Stop-RustDeskGui
     }
     else {
@@ -737,17 +633,10 @@ function Install-Or-Update-RustDesk {
         Log "RustDesk is not installed."
     }
 
-
-    # --------------------------------------------------------
-    # Installer
-    # --------------------------------------------------------
-
     $installer = Get-RustDeskInstaller
-
 
     Log "Using installer:"
     Log $installer
-
 
     try {
 
@@ -764,27 +653,16 @@ function Install-Or-Update-RustDesk {
         )
     }
 
-
     Log "RustDesk installer PID: $($installerProcess.Id)"
-
-
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # Не ждём installer exit.
-    # Ждём реальный installed rustdesk.exe нужной версии.
-    # --------------------------------------------------------
 
     $installedExe = Wait-ForRustDeskInstallation `
         -InstallerProcess $installerProcess
-
 
     if (-not $installedExe) {
 
         try {
 
             $installerProcess.Refresh()
-
 
             if (-not $installerProcess.HasExited) {
 
@@ -796,21 +674,17 @@ function Install-Or-Update-RustDesk {
         }
         catch {}
 
-
         Fail (
             "RustDesk $TargetVersion was not detected " +
             "within $InstallTimeoutSeconds seconds."
         )
     }
 
-
     Stop-HangingInstaller `
         -InstallerProcess $installerProcess
 
-
     $actualVersion = Get-RustDeskVersion `
         -Exe $installedExe
-
 
     if ($actualVersion -ne $TargetVersion) {
 
@@ -820,15 +694,21 @@ function Install-Or-Update-RustDesk {
         )
     }
 
-
     Log "RustDesk installation/update successful."
+
+    # Important:
+    # rustdesk.exe/version can already be visible while
+    # the installer is still finalizing service registration.
+    Log "Waiting for installer/service finalization..."
+
+    Start-Sleep -Seconds 5
 
     return $installedExe
 }
 
 
 # ============================================================
-# SERVICE
+# SERVICE STATE
 # ============================================================
 
 function Test-RustDeskServiceRunning {
@@ -837,13 +717,16 @@ function Test-RustDeskServiceRunning {
         -Name $ServiceName `
         -ErrorAction SilentlyContinue
 
-
     return (
         $service -and
         $service.Status -eq "Running"
     )
 }
 
+
+# ============================================================
+# ENSURE SERVICE
+# ============================================================
 
 function Ensure-RustDeskService {
 
@@ -852,56 +735,71 @@ function Ensure-RustDeskService {
         [string]$Exe
     )
 
+    Log "Checking RustDesk Service..."
+
+    # ========================================================
+    # 1. Initial wait
+    # ========================================================
+
+    Log "Waiting for RustDesk service initialization..."
+
+    Start-Sleep -Seconds 5
+
+    # ========================================================
+    # 2. Service exists?
+    # ========================================================
 
     $service = Get-Service `
         -Name $ServiceName `
         -ErrorAction SilentlyContinue
 
-
-    # --------------------------------------------------------
-    # Install Service if missing
-    # --------------------------------------------------------
+    # ========================================================
+    # 3. Missing -> install
+    # ========================================================
 
     if (-not $service) {
 
         Log "RustDesk Service does not exist."
         Log "Installing RustDesk Service..."
 
+        try {
 
-        & $Exe --install-service
+            & $Exe --install-service
 
+            Log "--install-service exit code: $LASTEXITCODE"
+        }
+        catch {
 
-        if ($LASTEXITCODE -ne 0) {
-
-            Fail (
-                "--install-service failed. " +
-                "Exit code: $LASTEXITCODE"
+            Log (
+                "--install-service exception: " +
+                $_.Exception.Message
             )
         }
 
+        Log "Waiting for Service registration..."
 
-        for ($i = 0; $i -lt 15; $i++) {
+        for ($i = 1; $i -le 20; $i++) {
+
+            Start-Sleep -Seconds 1
 
             $service = Get-Service `
                 -Name $ServiceName `
                 -ErrorAction SilentlyContinue
 
-
             if ($service) {
+
+                Log "RustDesk Service registered."
+
                 break
             }
 
-
-            Start-Sleep -Seconds 1
+            Log "Waiting for Service registration: $i/20"
         }
-
 
         if (-not $service) {
+
             Fail "RustDesk Service was not created."
         }
-
-
-        Log "RustDesk Service created."
     }
     else {
 
@@ -909,51 +807,125 @@ function Ensure-RustDeskService {
     }
 
 
-    # --------------------------------------------------------
-    # Start service
-    # --------------------------------------------------------
+    # ========================================================
+    # 4. Observe first — don't immediately call Start-Service
+    # ========================================================
 
-    $service.Refresh()
+    Log "Waiting for RustDesk Service state..."
 
-
-    if ($service.Status -ne "Running") {
-
-        Log "Starting RustDesk Service..."
-
-
-        try {
-
-            Start-Service `
-                -Name $ServiceName `
-                -ErrorAction Stop
-        }
-        catch {
-
-            Fail (
-                "Could not start RustDesk Service: " +
-                $_.Exception.Message
-            )
-        }
-    }
-
-
-    # --------------------------------------------------------
-    # Wait RUNNING
-    # --------------------------------------------------------
-
-    Log "Waiting for RustDesk Service = RUNNING..."
-
-
-    for (
-        $i = 0;
-        $i -lt $ServiceTimeoutSeconds;
-        $i++
-    ) {
+    for ($i = 1; $i -le 15; $i++) {
 
         $service = Get-Service `
             -Name $ServiceName `
             -ErrorAction SilentlyContinue
 
+        if (-not $service) {
+
+            Log "Service temporarily unavailable: $i/15"
+
+            Start-Sleep -Seconds 1
+
+            continue
+        }
+
+        Log "RustDesk Service status: $($service.Status)"
+
+        if ($service.Status -eq "Running") {
+
+            Log "RustDesk Service is RUNNING."
+
+            Start-Sleep -Seconds 3
+
+            return
+        }
+
+        if (
+            $service.Status -eq "StartPending" -or
+            $service.Status -eq "StopPending"
+        ) {
+
+            Log "Service is transitioning. Waiting..."
+
+            Start-Sleep -Seconds 1
+
+            continue
+        }
+
+        Start-Sleep -Seconds 1
+    }
+
+
+    # ========================================================
+    # 5. Examine final state after wait
+    # ========================================================
+
+    $service = Get-Service `
+        -Name $ServiceName `
+        -ErrorAction SilentlyContinue
+
+    if (-not $service) {
+
+        Fail "RustDesk Service disappeared."
+    }
+
+    if ($service.Status -eq "Running") {
+
+        Log "RustDesk Service is RUNNING."
+
+        Start-Sleep -Seconds 3
+
+        return
+    }
+
+    if ($service.Status -ne "Stopped") {
+
+        Fail (
+            "RustDesk Service is in unexpected state: " +
+            "$($service.Status)"
+        )
+    }
+
+
+    # ========================================================
+    # 6. Actually start it
+    # ========================================================
+
+    Log "RustDesk Service is STOPPED."
+    Log "Starting RustDesk Service..."
+
+    try {
+
+        Start-Service `
+            -Name $ServiceName `
+            -ErrorAction Stop
+
+        Log "Start-Service command accepted."
+    }
+    catch {
+
+        # Do not fail immediately.
+        # RustDesk/SCM can still transition to Running.
+        Log "Start-Service returned an error."
+
+        # Avoid dumping localized Windows error text into NSIS.
+    }
+
+
+    # ========================================================
+    # 7. Wait for RUNNING
+    # ========================================================
+
+    for (
+        $i = 1;
+        $i -le $ServiceTimeoutSeconds;
+        $i++
+    ) {
+
+        Start-Sleep -Seconds 1
+
+        $service = Get-Service `
+            -Name $ServiceName `
+            -ErrorAction SilentlyContinue
 
         if (
             $service -and
@@ -962,20 +934,85 @@ function Ensure-RustDeskService {
 
             Log "RustDesk Service is RUNNING."
 
+            Log "Waiting for RustDesk IPC initialization..."
 
-            # Важная пауза для IPC.
             Start-Sleep -Seconds 3
-
 
             return
         }
 
+        if ($service -and (($i % 5) -eq 0)) {
 
-        Start-Sleep -Seconds 1
+            Log (
+                "Waiting for RUNNING: " +
+                "$($service.Status) " +
+                "($i/$ServiceTimeoutSeconds)"
+            )
+        }
     }
 
 
-    Fail "RustDesk Service did not become RUNNING."
+    # ========================================================
+    # 8. Fallback through sc.exe
+    # ========================================================
+
+    Log "Start-Service did not produce RUNNING state."
+    Log "Trying sc.exe start Rustdesk..."
+
+    try {
+
+        & sc.exe start $ServiceName | Out-Null
+    }
+    catch {}
+
+    for ($i = 1; $i -le 15; $i++) {
+
+        Start-Sleep -Seconds 1
+
+        $service = Get-Service `
+            -Name $ServiceName `
+            -ErrorAction SilentlyContinue
+
+        if (
+            $service -and
+            $service.Status -eq "Running"
+        ) {
+
+            Log "RustDesk Service is RUNNING."
+
+            Log "Waiting for RustDesk IPC initialization..."
+
+            Start-Sleep -Seconds 3
+
+            return
+        }
+    }
+
+
+    # ========================================================
+    # 9. Diagnostics
+    # ========================================================
+
+    Log "RustDesk Service failed to reach RUNNING."
+
+    try {
+
+        $service = Get-CimInstance `
+            Win32_Service `
+            -Filter "Name='$ServiceName'" `
+            -ErrorAction SilentlyContinue
+
+        if ($service) {
+
+            Log "Service State:     [$($service.State)]"
+            Log "Service StartMode: [$($service.StartMode)]"
+            Log "Service PID:       [$($service.ProcessId)]"
+            Log "Service Path:      [$($service.PathName)]"
+        }
+    }
+    catch {}
+
+    Fail "RustDesk Service could not be started."
 }
 
 
@@ -990,7 +1027,6 @@ function Apply-RustDeskConfig {
         [string]$Exe
     )
 
-
     if (
         [string]::IsNullOrWhiteSpace($RustDeskConfig) -or
         $RustDeskConfig -eq "YOUR_EXPORTED_CONFIG"
@@ -999,45 +1035,36 @@ function Apply-RustDeskConfig {
         Fail "RustDeskConfig is not configured."
     }
 
-
     if (-not (Test-RustDeskServiceRunning)) {
 
         Fail "Service is not running before --config."
     }
 
-
     Log "Applying RustDesk self-hosted config..."
 
-
     & $Exe --config $RustDeskConfig
-
 
     if ($LASTEXITCODE -ne 0) {
 
         Log (
-            "First --config attempt failed: " +
-            "$LASTEXITCODE"
+            "First --config attempt failed. " +
+            "Exit code: $LASTEXITCODE"
         )
-
 
         Start-Sleep -Seconds 3
 
-
         Log "Retrying --config..."
 
-
         & $Exe --config $RustDeskConfig
-
 
         if ($LASTEXITCODE -ne 0) {
 
             Fail (
-                "--config failed twice. Exit code: " +
-                "$LASTEXITCODE"
+                "--config failed twice. " +
+                "Exit code: $LASTEXITCODE"
             )
         }
     }
-
 
     Log "--config completed."
 
@@ -1056,51 +1083,41 @@ function Apply-RustDeskPassword {
         [string]$Exe
     )
 
-
     if ([string]::IsNullOrWhiteSpace($RustDeskPassword)) {
 
         Fail "RustDeskPassword is empty."
     }
-
 
     if (-not (Test-RustDeskServiceRunning)) {
 
         Fail "Service is not running before --password."
     }
 
-
     Log "Applying permanent password..."
 
-
     & $Exe --password $RustDeskPassword
-
 
     if ($LASTEXITCODE -ne 0) {
 
         Log (
-            "First --password attempt failed: " +
-            "$LASTEXITCODE"
+            "First --password attempt failed. " +
+            "Exit code: $LASTEXITCODE"
         )
-
 
         Start-Sleep -Seconds 3
 
-
         Log "Retrying --password..."
 
-
         & $Exe --password $RustDeskPassword
-
 
         if ($LASTEXITCODE -ne 0) {
 
             Fail (
-                "--password failed twice. Exit code: " +
-                "$LASTEXITCODE"
+                "--password failed twice. " +
+                "Exit code: $LASTEXITCODE"
             )
         }
     }
-
 
     Log "--password completed."
 
@@ -1109,7 +1126,7 @@ function Apply-RustDeskPassword {
 
 
 # ============================================================
-# READ OPTIONS
+# READ OPTION
 # ============================================================
 
 function Get-RustDeskOption {
@@ -1122,7 +1139,6 @@ function Get-RustDeskOption {
         [string]$Option
     )
 
-
     try {
 
         $result = & $Exe `
@@ -1130,11 +1146,9 @@ function Get-RustDeskOption {
             $Option `
             2>&1
 
-
         if ($LASTEXITCODE -ne 0) {
             return $null
         }
-
 
         return ($result -join "").Trim()
     }
@@ -1156,16 +1170,13 @@ function Get-RustDeskId {
         [string]$Exe
     )
 
-
     try {
 
         $result = & $Exe --get-id 2>&1
 
-
         if ($LASTEXITCODE -ne 0) {
             return $null
         }
-
 
         return ($result -join "").Trim()
     }
@@ -1177,7 +1188,7 @@ function Get-RustDeskId {
 
 
 # ============================================================
-# VERIFY
+# FINAL VERIFICATION
 # ============================================================
 
 function Verify-RustDesk {
@@ -1187,36 +1198,24 @@ function Verify-RustDesk {
         [string]$Exe
     )
 
-
     Log ""
     Log "============================================"
     Log "Final RustDesk verification"
     Log "============================================"
 
-
-    # --------------------------------------------------------
     # EXE
-    # --------------------------------------------------------
-
     if (-not (Test-Path -LiteralPath $Exe)) {
 
         Fail "rustdesk.exe does not exist."
     }
 
-
     Log "Executable: $Exe"
 
-
-    # --------------------------------------------------------
-    # VERSION
-    # --------------------------------------------------------
-
+    # Version
     $version = Get-RustDeskVersion `
         -Exe $Exe
 
-
     Log "Version: [$version]"
-
 
     if ($version -ne $TargetVersion) {
 
@@ -1226,32 +1225,21 @@ function Verify-RustDesk {
         )
     }
 
-
-    # --------------------------------------------------------
-    # SERVICE
-    # --------------------------------------------------------
-
+    # Service
     if (-not (Test-RustDeskServiceRunning)) {
 
         Fail "RustDesk Service is not RUNNING."
     }
 
-
     Log "Service: RUNNING"
 
-
-    # --------------------------------------------------------
-    # ID
-    # --------------------------------------------------------
-
+    # ID with retry
     $rustDeskId = $null
 
-
-    for ($i = 0; $i -lt 10; $i++) {
+    for ($i = 1; $i -le 10; $i++) {
 
         $rustDeskId = Get-RustDeskId `
             -Exe $Exe
-
 
         if (
             -not [string]::IsNullOrWhiteSpace(
@@ -1261,44 +1249,33 @@ function Verify-RustDesk {
             break
         }
 
-
-        Log "RustDesk ID not ready. Retrying..."
+        Log "RustDesk ID not ready. Retrying $i/10..."
 
         Start-Sleep -Seconds 2
     }
-
 
     if ([string]::IsNullOrWhiteSpace($rustDeskId)) {
 
         Fail "RustDesk ID is empty."
     }
 
-
     Log "RustDesk ID: $rustDeskId"
 
-
-    # --------------------------------------------------------
-    # OPTIONS
-    # --------------------------------------------------------
-
+    # Read-back server settings
     $idServer = Get-RustDeskOption `
         -Exe $Exe `
         -Option "custom-rendezvous-server"
-
 
     $relayServer = Get-RustDeskOption `
         -Exe $Exe `
         -Option "relay-server"
 
-
     $key = Get-RustDeskOption `
         -Exe $Exe `
         -Option "key"
 
-
     Log "custom-rendezvous-server = [$idServer]"
     Log "relay-server             = [$relayServer]"
-
 
     if ([string]::IsNullOrWhiteSpace($key)) {
 
@@ -1309,12 +1286,10 @@ function Verify-RustDesk {
         Log "key                      = [configured]"
     }
 
-
     if (-not (Test-RustDeskServiceRunning)) {
 
         Fail "RustDesk Service stopped during configuration."
     }
-
 
     Log "Final verification SUCCESS."
 }
@@ -1333,26 +1308,16 @@ try {
     Log "============================================"
     Log ""
 
-
-    # --------------------------------------------------------
-    # Admin
-    # --------------------------------------------------------
-
+    # 1. Admin
     if (-not (Test-Administrator)) {
 
         Fail "Administrator privileges are required."
     }
 
-
     Log "Administrator privileges: OK"
 
-
-    # --------------------------------------------------------
-    # Install/update
-    # --------------------------------------------------------
-
+    # 2. Install/update/downgrade
     $RustDeskExe = Install-Or-Update-RustDesk
-
 
     if (
         [string]::IsNullOrWhiteSpace($RustDeskExe) -or
@@ -1362,24 +1327,14 @@ try {
         Fail "rustdesk.exe could not be found."
     }
 
-
-    # --------------------------------------------------------
-    # Service
-    # --------------------------------------------------------
-
+    # 3. Service
     Ensure-RustDeskService `
         -Exe $RustDeskExe
 
-
-    # --------------------------------------------------------
-    # GUI
-    #
-    # Service НЕ останавливаем.
-    # --------------------------------------------------------
-
+    # 4. Close GUI only
     Stop-RustDeskGui
 
-
+    # 5. Service must remain alive
     if (-not (Test-RustDeskServiceRunning)) {
 
         Fail (
@@ -1388,40 +1343,19 @@ try {
         )
     }
 
-
     Log "RustDesk Service remains RUNNING."
 
-
-    # --------------------------------------------------------
-    # Config
-    # --------------------------------------------------------
-
+    # 6. Config
     Apply-RustDeskConfig `
         -Exe $RustDeskExe
 
-
-    # --------------------------------------------------------
-    # Password
-    # --------------------------------------------------------
-
+    # 7. Password
     Apply-RustDeskPassword `
         -Exe $RustDeskExe
 
-
-    # --------------------------------------------------------
-    # Verify
-    # --------------------------------------------------------
-
+    # 8. Verify
     Verify-RustDesk `
         -Exe $RustDeskExe
-
-
-    # --------------------------------------------------------
-    # DONE
-    #
-    # GUI здесь НЕ стартуем.
-    # NSIS должен сделать это после exit 0.
-    # --------------------------------------------------------
 
     Log ""
     Log "============================================"
@@ -1429,6 +1363,8 @@ try {
     Log "============================================"
     Log ""
 
+    # GUI intentionally NOT started here.
+    # NSIS should start it after exit 0.
 
     exit 0
 }
@@ -1439,15 +1375,11 @@ catch {
     Log "UNHANDLED ERROR"
     Log "============================================"
 
-
     Log $_.Exception.Message
 
-
     if ($_.ScriptStackTrace) {
-
         Log $_.ScriptStackTrace
     }
-
 
     exit 1
 }
