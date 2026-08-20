@@ -3,6 +3,23 @@
 #
 # Tauri / NSIS RustDesk deployment
 # Target: RustDesk 1.4.9
+#
+# Flow:
+#   1. Detect/install/update RustDesk
+#   2. Close user GUI
+#   3. Ensure RustDesk Service exists
+#   4. Stop Service
+#   5. Backup + patch:
+#        - LocalService RustDesk2.toml
+#        - interactive user's RustDesk2.toml
+#   6. Start Service
+#   7. Apply permanent password
+#   8. Verify configs
+#   9. Verify Service
+#  10. Get RustDesk ID
+#
+# RustDesk GUI is intentionally NOT started from this elevated
+# PowerShell process. Start it from NSIS after exit code 0.
 # ============================================================
 
 $ErrorActionPreference = "Stop"
@@ -14,15 +31,17 @@ $ErrorActionPreference = "Stop"
 
 $TargetVersion = "1.4.9"
 
+# Self-hosted configuration
 $RustDeskIdServer = "rustdesk.magendamd.com"
 $RustDeskRelayServer = "rustdesk.magendamd.com"
-
-# Вставь свой текущий RustDesk public key
 $RustDeskKey = "+Li02oekgNMPX9Aa6jPAJhJCE7Cuu6kmP1zB6nMpKMc="
 
+# RustDesk rendezvous port.
+# If your server uses a non-standard port, change it.
 $RustDeskRendezvousPort = 21116
 
-# Вставь свой permanent password
+# Test password.
+# Later better generate/fetch dynamically.
 $RustDeskPassword = "rihn7vw9"
 
 $ServiceName = "Rustdesk"
@@ -80,6 +99,7 @@ function Test-Administrator {
 
 # ============================================================
 # VERSION
+#
 # 1.4.9+67 -> 1.4.9
 # ============================================================
 
@@ -252,6 +272,10 @@ function Get-RustDeskInstaller {
 
 # ============================================================
 # INTERACTIVE USER
+#
+# Important:
+# installer is elevated, therefore $env:APPDATA may point to
+# Administrator rather than the actual logged-in user.
 # ============================================================
 
 function Get-InteractiveUserProfile {
@@ -279,6 +303,7 @@ function Get-InteractiveUserProfile {
             -ErrorAction Stop
 
         if ($owner.ReturnValue -ne 0) {
+
             return $null
         }
 
@@ -286,6 +311,10 @@ function Get-InteractiveUserProfile {
         $domain = $owner.Domain
 
         Log "Interactive user: $domain\$userName"
+
+        # ----------------------------------------------------
+        # Resolve SID
+        # ----------------------------------------------------
 
         $account = New-Object `
             System.Security.Principal.NTAccount(
@@ -298,6 +327,11 @@ function Get-InteractiveUserProfile {
         ).Value
 
         Log "Interactive user SID: $sid"
+
+
+        # ----------------------------------------------------
+        # Resolve actual profile path from ProfileList
+        # ----------------------------------------------------
 
         $profileKey = `
             "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
@@ -385,6 +419,8 @@ function Get-RustDeskServicePid {
 
 # ============================================================
 # CLOSE GUI
+#
+# Service is NOT stopped here.
 # ============================================================
 
 function Stop-RustDeskGui {
@@ -562,8 +598,6 @@ function Install-Or-Update-RustDesk {
 
     try {
 
-        # IMPORTANT:
-        # no -Wait here.
         $installerProcess = Start-Process `
             -FilePath $installer `
             -ArgumentList "--silent-install" `
@@ -583,8 +617,6 @@ function Install-Or-Update-RustDesk {
 
         try {
 
-            $installerProcess.Refresh()
-
             if (-not $installerProcess.HasExited) {
 
                 Stop-Process `
@@ -599,9 +631,9 @@ function Install-Or-Update-RustDesk {
     }
 
 
+    # Installer sometimes remains alive even though installation
+    # already finished.
     try {
-
-        $installerProcess.Refresh()
 
         if (-not $installerProcess.HasExited) {
 
@@ -629,6 +661,7 @@ function Install-Or-Update-RustDesk {
 
     Log "RustDesk installation/update successful."
 
+    # Installer can finish service registration after EXE appears.
     Start-Sleep -Seconds 5
 
     return $installedExe
@@ -637,12 +670,6 @@ function Install-Or-Update-RustDesk {
 
 # ============================================================
 # ENSURE SERVICE EXISTS
-#
-# IMPORTANT:
-# no direct "& rustdesk.exe"
-# no Start-Process -Wait
-#
-# We launch CLI separately and poll the REAL Windows Service.
 # ============================================================
 
 function Ensure-RustDeskServiceExists {
@@ -655,9 +682,7 @@ function Ensure-RustDeskServiceExists {
     $service = Get-RustDeskService
 
     if ($service) {
-
         Log "RustDesk Service exists."
-
         return
     }
 
@@ -665,7 +690,6 @@ function Ensure-RustDeskServiceExists {
     Log "Installing RustDesk Service..."
 
     try {
-
         $process = Start-Process `
             -FilePath $Exe `
             -ArgumentList "--install-service" `
@@ -675,37 +699,21 @@ function Ensure-RustDeskServiceExists {
         Log "--install-service PID: $($process.Id)"
     }
     catch {
-
-        Fail (
-            "Could not start RustDesk --install-service: " +
-            $_.Exception.Message
-        )
+        Fail "Could not start RustDesk --install-service: $($_.Exception.Message)"
     }
 
-
-    # --------------------------------------------------------
-    # Wait for actual Windows Service registration.
-    # --------------------------------------------------------
-
     for ($i = 1; $i -le 30; $i++) {
-
         Start-Sleep -Seconds 1
 
         $service = Get-RustDeskService
 
         if ($service) {
-
             Log "RustDesk Service registered."
 
-            # CLI may remain alive after completing its action.
             try {
-
                 $process.Refresh()
 
                 if (-not $process.HasExited) {
-
-                    Log "Stopping remaining --install-service process..."
-
                     Stop-Process `
                         -Id $process.Id `
                         -Force `
@@ -718,22 +726,14 @@ function Ensure-RustDeskServiceExists {
         }
 
         if (($i % 5) -eq 0) {
-
             Log "Waiting for Service registration: $i/30"
         }
     }
 
-
-    # --------------------------------------------------------
-    # Timeout cleanup
-    # --------------------------------------------------------
-
     try {
-
         $process.Refresh()
 
         if (-not $process.HasExited) {
-
             Stop-Process `
                 -Id $process.Id `
                 -Force `
@@ -741,7 +741,6 @@ function Ensure-RustDeskServiceExists {
         }
     }
     catch {}
-
 
     Fail "RustDesk Service was not created."
 }
@@ -851,6 +850,7 @@ function Start-RustDeskService {
         ) {
 
             Log "RustDesk Service is RUNNING."
+
             Log "Waiting for RustDesk IPC initialization..."
 
             Start-Sleep -Seconds 3
@@ -874,12 +874,24 @@ function ConvertTo-TomlString {
         [string]$Value
     )
 
+    # Use single-quoted TOML strings.
+    # Single quote inside value must be escaped by doubling.
     return $Value.Replace("'", "''")
 }
 
 
 # ============================================================
 # PATCH TOML
+#
+# Preserves unrelated RustDesk settings.
+#
+# Patches:
+#   top-level rendezvous_server
+#
+#   [options]
+#   custom-rendezvous-server
+#   relay-server
+#   key
 # ============================================================
 
 function Patch-RustDeskToml {
@@ -941,6 +953,7 @@ function Patch-RustDeskToml {
     if (Test-Path -LiteralPath $Path) {
 
         foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+
             $lines.Add($line)
         }
     }
@@ -959,15 +972,15 @@ function Patch-RustDeskToml {
     # ========================================================
 
     $foundRendezvous = $false
+
     $inSection = $false
 
     for ($i = 0; $i -lt $lines.Count; $i++) {
 
         $trimmed = $lines[$i].Trim()
 
-        # IMPORTANT:
-        # Correct TOML section detection.
         if ($trimmed -match '^$begin:math:display$\.\+$end:math:display$$') {
+
             $inSection = $true
         }
 
@@ -1063,6 +1076,7 @@ function Patch-RustDeskToml {
 
         $found = $false
 
+        # optionsEnd can change while inserting.
         for (
             $j = $optionsStart + 1;
             $j -lt $optionsEnd;
@@ -1191,8 +1205,9 @@ function Verify-RustDeskToml {
 # ============================================================
 # PASSWORD
 #
-# No Start-Process -Wait.
-# We use bounded WaitForExit(10000).
+# RustDesk 1.4.9 on tested machine prints:
+#
+# Done!
 # ============================================================
 
 function Apply-RustDeskPassword {
@@ -1207,99 +1222,42 @@ function Apply-RustDeskPassword {
         Fail "Service must be RUNNING before --password."
     }
 
-    if ([string]::IsNullOrWhiteSpace($RustDeskPassword)) {
-
-        Fail "RustDesk password is empty."
-    }
-
     Log "Applying RustDesk permanent password..."
 
     for ($attempt = 1; $attempt -le 3; $attempt++) {
 
         Log "Password attempt $attempt/3..."
 
-        $process = $null
-
         try {
 
-            $process = Start-Process `
-                -FilePath $Exe `
-                -ArgumentList @(
-                    "--password",
-                    $RustDeskPassword
-                ) `
-                -PassThru `
-                -WindowStyle Hidden
+            $result = (
+                & $Exe `
+                    --password `
+                    $RustDeskPassword `
+                    2>&1 |
+                Out-String
+            ).Trim()
 
-            Log "--password PID: $($process.Id)"
+            Log "Password CLI response: [$result]"
 
-            # IMPORTANT:
-            # bounded timeout, not Start-Process -Wait
-            $finished = $process.WaitForExit(10000)
+            if ($result -match 'Done!') {
 
-            if ($finished) {
+                Log "Permanent password applied."
 
-                Log "--password process exited."
-
-                if ($process.ExitCode -eq 0) {
-
-                    Log "Permanent password command completed."
-
-                    Start-Sleep -Seconds 2
-
-                    return
-                }
-
-                Log "--password exit code: $($process.ExitCode)"
-            }
-            else {
-
-                Log "--password timed out after 10 seconds."
-
-                try {
-
-                    Stop-Process `
-                        -Id $process.Id `
-                        -Force `
-                        -ErrorAction SilentlyContinue
-                }
-                catch {}
+                return
             }
         }
-        catch {
-
-            Log (
-                "Password command failed: " +
-                $_.Exception.Message
-            )
-
-            if ($process) {
-
-                try {
-
-                    if (-not $process.HasExited) {
-
-                        Stop-Process `
-                            -Id $process.Id `
-                            -Force `
-                            -ErrorAction SilentlyContinue
-                    }
-                }
-                catch {}
-            }
-        }
+        catch {}
 
         Start-Sleep -Seconds 2
     }
 
-    Fail "RustDesk --password failed."
+    Fail "RustDesk --password did not return Done!."
 }
 
 
 # ============================================================
 # GET ID
-#
-# Separate process + temp stdout + bounded timeout.
 # ============================================================
 
 function Get-RustDeskId {
@@ -1309,117 +1267,16 @@ function Get-RustDeskId {
         [string]$Exe
     )
 
-    $stdoutFile = Join-Path `
-        $env:TEMP `
-        ("rustdesk-id-" + [Guid]::NewGuid().ToString("N") + ".txt")
-
-    $stderrFile = Join-Path `
-        $env:TEMP `
-        ("rustdesk-id-error-" + [Guid]::NewGuid().ToString("N") + ".txt")
-
-    $process = $null
-
     try {
 
-        $process = Start-Process `
-            -FilePath $Exe `
-            -ArgumentList "--get-id" `
-            -RedirectStandardOutput $stdoutFile `
-            -RedirectStandardError $stderrFile `
-            -PassThru `
-            -WindowStyle Hidden
-
-        # IMPORTANT:
-        # timeout instead of Start-Process -Wait
-        $finished = $process.WaitForExit(10000)
-
-        if (-not $finished) {
-
-            Log "--get-id timed out after 10 seconds."
-
-            try {
-
-                Stop-Process `
-                    -Id $process.Id `
-                    -Force `
-                    -ErrorAction SilentlyContinue
-            }
-            catch {}
-
-            return $null
-        }
-
-        if ($process.ExitCode -ne 0) {
-
-            Log "--get-id exit code: $($process.ExitCode)"
-
-            if (Test-Path -LiteralPath $stderrFile) {
-
-                $errorText = (
-                    [System.IO.File]::ReadAllText($stderrFile)
-                ).Trim()
-
-                if (-not [string]::IsNullOrWhiteSpace($errorText)) {
-
-                    Log "--get-id stderr: [$errorText]"
-                }
-            }
-
-            return $null
-        }
-
-        if (-not (Test-Path -LiteralPath $stdoutFile)) {
-
-            Log "--get-id stdout file not found."
-
-            return $null
-        }
-
-        $value = (
-            [System.IO.File]::ReadAllText($stdoutFile)
+        return (
+            & $Exe --get-id 2>&1 |
+            Out-String
         ).Trim()
-
-        if ([string]::IsNullOrWhiteSpace($value)) {
-
-            Log "--get-id returned empty output."
-
-            return $null
-        }
-
-        return $value
     }
     catch {
 
-        Log "--get-id failed: $($_.Exception.Message)"
-
-        if ($process) {
-
-            try {
-
-                if (-not $process.HasExited) {
-
-                    Stop-Process `
-                        -Id $process.Id `
-                        -Force `
-                        -ErrorAction SilentlyContinue
-                }
-            }
-            catch {}
-        }
-
         return $null
-    }
-    finally {
-
-        Remove-Item `
-            -LiteralPath $stdoutFile `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-        Remove-Item `
-            -LiteralPath $stderrFile `
-            -Force `
-            -ErrorAction SilentlyContinue
     }
 }
 
@@ -1451,7 +1308,7 @@ try {
 
 
     # ========================================================
-    # 2. Interactive user
+    # 2. Detect interactive user BEFORE killing GUI
     # ========================================================
 
     $interactiveUser = Get-InteractiveUserProfile
@@ -1466,7 +1323,7 @@ try {
 
 
     # ========================================================
-    # 3. Install / update
+    # 3. Install / update RustDesk
     # ========================================================
 
     $RustDeskExe = Install-Or-Update-RustDesk
@@ -1497,13 +1354,15 @@ try {
 
     # ========================================================
     # 6. Stop Service
+    #
+    # From this point RustDesk should not rewrite TOML.
     # ========================================================
 
     Stop-RustDeskService
 
 
     # ========================================================
-    # 7. Config paths
+    # 7. Build config paths
     # ========================================================
 
     $serviceConfig = Join-Path `
@@ -1546,7 +1405,7 @@ try {
 
 
     # ========================================================
-    # 10. Verify before Service start
+    # 10. Verify files before RustDesk starts
     # ========================================================
 
     Verify-RustDeskToml `
@@ -1572,7 +1431,9 @@ try {
 
 
     # ========================================================
-    # 13. Verify configs after Service start
+    # 13. Wait a little, then verify configs again
+    #
+    # This detects if RustDesk rewrites our values.
     # ========================================================
 
     Start-Sleep -Seconds 3
@@ -1586,7 +1447,7 @@ try {
 
 
     # ========================================================
-    # 14. Service verification
+    # 14. Service
     # ========================================================
 
     if (-not (Test-RustDeskServiceRunning)) {
@@ -1631,6 +1492,7 @@ try {
                 $rustDeskId
             )
         ) {
+
             break
         }
 
@@ -1638,7 +1500,6 @@ try {
 
         Start-Sleep -Seconds 2
     }
-
 
     if ([string]::IsNullOrWhiteSpace($rustDeskId)) {
 
@@ -1666,6 +1527,9 @@ try {
     Log ""
 
 
+    # GUI intentionally not started here.
+    # Start it from NSIS after script exit code 0.
+
     exit 0
 }
 catch {
@@ -1678,6 +1542,7 @@ catch {
     Log $_.Exception.Message
 
     if ($_.ScriptStackTrace) {
+
         Log $_.ScriptStackTrace
     }
 
