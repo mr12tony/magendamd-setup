@@ -5,7 +5,7 @@
     ; ========================================================
     ; 1. EXTRACT INSTALL TOKEN
     ;
-    ; Supported filenames:
+    ; Supported:
     ;
     ; magendamd-setup-abc123.exe
     ; magendamd-setup-abc123 (1).exe
@@ -14,13 +14,10 @@
     ; Result:
     ; abc123
     ;
-    ; Token is saved to:
-    ;
+    ; Saved to:
     ; C:\ProgramData\Magendamd\install.json
     ;
-    ; IMPORTANT:
-    ; Failure to extract token does NOT abort installation.
-    ; RustDesk deployment will continue.
+    ; Token extraction failure does NOT abort installation.
     ; ========================================================
 
     DetailPrint ""
@@ -32,9 +29,6 @@
 
     ; --------------------------------------------------------
     ; ProgramData
-    ;
-    ; With SetShellVarContext all:
-    ; $LOCALAPPDATA -> system-wide LocalAppData / ProgramData
     ; --------------------------------------------------------
 
     SetShellVarContext all
@@ -43,81 +37,89 @@
 
     CreateDirectory "$R9"
 
+    DetailPrint "Token directory:"
+    DetailPrint "$R9"
 
     ; --------------------------------------------------------
-    ; Pass paths safely to PowerShell using environment vars.
-    ; --------------------------------------------------------
-
-    System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_INSTALLER", t "$EXEPATH") i .r0'
-
-    System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_TOKEN_FILE", t "$R9\install.json") i .r0'
-
-
-    ; --------------------------------------------------------
-    ; Extract token.
+    ; Extract token from installer filename
     ;
-    ; Regex:
-    ;
-    ; ^magendamd-setup-(.+?)(?: \(\d+\))?$
+    ; PowerShell prints ONLY token to stdout.
     ;
     ; Examples:
     ;
-    ; magendamd-setup-ABC.exe
-    ; -> ABC
+    ; magendamd-setup-qwertyiop.exe
+    ; -> qwertyiop
     ;
-    ; magendamd-setup-ABC (1).exe
-    ; -> ABC
-    ;
-    ; magendamd-setup-ABC (22).exe
-    ; -> ABC
-    ;
-    ; JSON:
-    ;
-    ; {"install_token":"ABC"}
-    ;
-    ; Token itself is intentionally NOT printed to installer log.
+    ; magendamd-setup-qwertyiop (2).exe
+    ; -> qwertyiop
     ; --------------------------------------------------------
 
-    nsExec::ExecToLog \
-        'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$name=[System.IO.Path]::GetFileNameWithoutExtension($env:MAGENDAMD_INSTALLER); if($name -match ''^magendamd-setup-(.+?)(?: \(\d+\))?$''){ $token=$Matches[1].Trim(); if([string]::IsNullOrWhiteSpace($token)){ exit 3 }; $obj=@{install_token=$token}; $json=$obj | ConvertTo-Json -Compress; [System.IO.File]::WriteAllText($env:MAGENDAMD_TOKEN_FILE,$json,(New-Object System.Text.UTF8Encoding($false))); exit 0 } else { exit 2 }"'
+    nsExec::ExecToStack \
+        'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$name=[System.IO.Path]::GetFileNameWithoutExtension(''$EXEPATH''); if($name -match ''^magendamd-setup-([A-Za-z0-9_-]+)(?: \(\d+\))?$''){ [Console]::Out.Write($Matches[1]); exit 0 } else { exit 2 }"'
 
-    Pop $2
+    ; first Pop = exit code
+    ; second Pop = stdout
 
+    Pop $R0
+    Pop $R1
+
+    DetailPrint "Token extraction exit code: $R0"
 
     ; --------------------------------------------------------
-    ; Token extraction is optional.
+    ; If token found
     ; --------------------------------------------------------
 
-    ${If} $2 == 0
+    ${If} $R0 == 0
 
-        ${If} ${FileExists} "$R9\install.json"
+        ${If} $R1 != ""
 
-            DetailPrint "Installation token extracted successfully."
-            DetailPrint "Token saved to:"
-            DetailPrint "$R9\install.json"
+            DetailPrint "Installation token extracted."
+
+            ; ------------------------------------------------
+            ; Write JSON directly from NSIS
+            ;
+            ; {"install_token":"qwertyiop"}
+            ; ------------------------------------------------
+
+            FileOpen $R2 "$R9\install.json" w
+
+            ${If} $R2 == ""
+
+                DetailPrint "WARNING: Could not open install.json."
+
+            ${Else}
+
+                FileWrite $R2 '{"install_token":"$R1"}'
+                FileClose $R2
+
+                ${If} ${FileExists} "$R9\install.json"
+
+                    DetailPrint "Installation token saved successfully."
+                    DetailPrint "Token file:"
+                    DetailPrint "$R9\install.json"
+
+                ${Else}
+
+                    DetailPrint "WARNING: install.json was not created."
+
+                ${EndIf}
+
+            ${EndIf}
 
         ${Else}
 
-            DetailPrint "WARNING: Token extraction returned success,"
-            DetailPrint "but install.json was not created."
+            DetailPrint "WARNING: Token extraction returned empty token."
 
         ${EndIf}
 
     ${Else}
 
         DetailPrint "WARNING: Installation token was not found."
+        DetailPrint "Expected filename:"
+        DetailPrint "magendamd-setup-TOKEN.exe"
         DetailPrint "Continuing installation without enrollment token."
 
     ${EndIf}
-
-
-    ; --------------------------------------------------------
-    ; Remove temporary environment variables.
-    ; --------------------------------------------------------
-
-    System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_INSTALLER", t "") i .r0'
-
-    System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_TOKEN_FILE", t "") i .r0'
 
 
     ; ========================================================
@@ -131,9 +133,8 @@
 
     StrCpy $0 "$INSTDIR\resources\windows\configure-rustdesk.ps1"
 
-
     ; --------------------------------------------------------
-    ; Verify PowerShell deployment script exists.
+    ; Verify PowerShell deployment script exists
     ; --------------------------------------------------------
 
     ${IfNot} ${FileExists} "$0"
@@ -145,9 +146,8 @@
 
     ${EndIf}
 
-
     ; --------------------------------------------------------
-    ; Run RustDesk deployment.
+    ; Run RustDesk deployment
     ; --------------------------------------------------------
 
     DetailPrint "Running RustDesk deployment..."
@@ -157,9 +157,8 @@
 
     Pop $1
 
-
     ; --------------------------------------------------------
-    ; RustDesk deployment is mandatory.
+    ; RustDesk deployment is mandatory
     ; --------------------------------------------------------
 
     ${If} $1 != 0
@@ -174,7 +173,6 @@
 
     ${EndIf}
 
-
     DetailPrint ""
     DetailPrint "RustDesk verified."
     DetailPrint "RustDesk deployment completed successfully."
@@ -187,11 +185,6 @@
     DetailPrint ""
     DetailPrint "Starting RustDesk GUI..."
 
-
-    ; --------------------------------------------------------
-    ; Prefer 64-bit Program Files.
-    ; --------------------------------------------------------
-
     ${If} ${FileExists} "$PROGRAMFILES64\RustDesk\rustdesk.exe"
 
         DetailPrint "RustDesk GUI:"
@@ -199,14 +192,12 @@
 
         Exec '"$PROGRAMFILES64\RustDesk\rustdesk.exe"'
 
-
     ${ElseIf} ${FileExists} "$PROGRAMFILES\RustDesk\rustdesk.exe"
 
         DetailPrint "RustDesk GUI:"
         DetailPrint "$PROGRAMFILES\RustDesk\rustdesk.exe"
 
         Exec '"$PROGRAMFILES\RustDesk\rustdesk.exe"'
-
 
     ${Else}
 
@@ -233,11 +224,6 @@
 
 ; ============================================================
 ; UNINSTALL
-;
-; Current policy:
-; - uninstall MyApp
-; - DO NOT uninstall RustDesk
-; - DO NOT delete enrollment token yet
 ; ============================================================
 
 !macro NSIS_HOOK_PREUNINSTALL
