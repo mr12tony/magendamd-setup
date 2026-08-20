@@ -42,7 +42,7 @@ $RustDeskRendezvousPort = 21116
 
 # Test password.
 # Later better generate/fetch dynamically.
-$RustDeskPassword = "TestPassword123!"
+$RustDeskPassword = "rihn7vw9"
 
 $ServiceName = "Rustdesk"
 
