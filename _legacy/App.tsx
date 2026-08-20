@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
 import { message, confirm } from "@tauri-apps/plugin-dialog";
 import { isRustDeskInstalled, getRustDeskId, openRustDesk } from "./rustdesk";
+import { getAppConfig, type AppConfig } from "./getAppConfig";
 import { getSystemInfo } from "./system";
+import { debugLog } from "./debugLog";
+import { sleep } from "./sleep";
+import { installRustDesk } from "./installer";
 
 import "./App.css";
 
@@ -16,58 +19,78 @@ function App() {
 
   const [processing, setProcessing] = useState(false);
   const [installed, setInstalled] = useState(false);
-  const [token, setToken] = useState("");
-  const [rustdeskId, setRustdeskId] = useState("");
+  const [config, setConfig] = useState<AppConfig | null>(null);
 
-  async function handleInstall() {
-    if (!token) return;
+  async function handleInstall({ reinstall = false } = {}) {
+    if (!config) return;
 
-    // try {
-    //   setProcessing(true);
+    const confirmation = reinstall
+      ? await confirm(
+          "Are you sure you want to reinstall RustDesk with Magendamd settings?",
+          {
+            title: "Reinstall RustDesk",
+            kind: "warning",
+          },
+        )
+      : true;
 
-    //   const rustdeskId = await getRustDeskId();
+    if (!confirmation) return;
 
-    //   if (!rustdeskId) {
-    //     throw new Error("Failed to get RustDesk ID");
-    //   }
+    try {
+      setProcessing(true);
 
-    //   const response = await fetch(`${config.api}/rustdesk/devices`, {
-    //     method: "POST",
-    //     headers: {
-    //       "Content-Type": "application/json",
-    //       "X-RustDesk-Key": token,
-    //     },
-    //     body: JSON.stringify({
-    //       device_id: rustdeskId,
-    //       password: config.password,
-    //       name: hostname,
-    //     }),
-    //   });
+      await debugLog("=== RustDesk installation started ===");
+      await installRustDesk(config);
+      await debugLog("=== RustDesk installer finished ===");
+      await sleep(3000);
 
-    //   if (!response.ok) {
-    //     throw new Error(`Failed to register device: ${response.status}`);
-    //   }
+      const rustdeskId = await getRustDeskId();
 
-    //   await message(
-    //     "RustDesk has been successfully installed and configured.",
-    //     {
-    //       title: "Installation completed",
-    //       kind: "info",
-    //     },
-    //   );
+      if (!rustdeskId) {
+        throw new Error("Failed to get RustDesk ID");
+      }
 
-    //   setInstalled(true);
-    // } catch (err) {
-    //   const msg =
-    //     err instanceof Error ? err.message : "RustDesk installation error";
+      await debugLog(`RustDesk ID: ${rustdeskId}`);
 
-    //   await message(msg, {
-    //     title: "Installation error",
-    //     kind: "error",
-    //   });
-    // } finally {
-    //   setProcessing(false);
-    // }
+      const response = await fetch(`${config.api}/rustdesk/devices`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-RustDesk-Key": config.token,
+        },
+        body: JSON.stringify({
+          device_id: rustdeskId,
+          password: config.password,
+          name: hostname,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to register device: ${response.status}`);
+      }
+
+      await debugLog("=== Device registered ===");
+      await message(
+        "RustDesk has been successfully installed and configured.",
+        {
+          title: "Installation completed",
+          kind: "info",
+        },
+      );
+
+      setInstalled(true);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : "RustDesk installation error";
+
+      await debugLog(`INSTALL ERROR: ${msg}`);
+      await message(msg, {
+        title: "Installation error",
+        kind: "error",
+      });
+    } finally {
+      setProcessing(false);
+    }
   }
 
   async function handleOpen() {
@@ -98,29 +121,44 @@ function App() {
 
   async function initialize() {
     try {
-      const installToken = await invoke<string>("get_install_token");
+      const config = await getAppConfig();
 
-      setToken(installToken);
-
-      const rustdeskId = await getRustDeskId();
-
-      if (!rustdeskId) {
-        throw new Error("Failed to get RustDesk ID");
-      }
-
-      setRustdeskId(rustdeskId);
+      setConfig(config);
     } catch (err) {
-      setToken("");
+      setConfig(null);
 
       const msg =
-        err instanceof Error ? err.message : "Failed to get AppConfig token.";
+        err instanceof Error
+          ? err.message
+          : "Failed to get RustDesk configuration.";
 
+      await debugLog(msg);
       await message(msg, {
         title: "Configuration error",
         kind: "error",
       });
 
       return;
+    }
+
+    try {
+      const installed = await isRustDeskInstalled();
+
+      if (!installed) {
+        setInstalled(false);
+        return;
+      }
+
+      setInstalled(true);
+
+      await message("RustDesk is already installed on this computer.", {
+        title: "RustDesk",
+        kind: "warning",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+
+      await debugLog(msg);
     }
   }
 
@@ -190,6 +228,31 @@ function App() {
         </div>
 
         <div className="flex gap-4 pt-2">
+          {installed && (
+            <button
+              type="button"
+              onClick={() => handleInstall({ reinstall: true })}
+              disabled={!config || processing || !hostname}
+              className="
+              inline-flex items-center justify-center
+              rounded-md
+              border-0
+              bg-[#e44262]
+              px-4 py-2
+              text-sm font-medium text-white
+              shadow-sm
+              transition
+              hover:opacity-90
+              focus:outline-none
+              focus:ring-0
+              disabled:cursor-not-allowed
+              disabled:opacity-50
+            "
+            >
+              {processing ? "Reinstalling..." : "Reinstall"}
+            </button>
+          )}
+
           {/* <button
             type="button"
             onClick={handleClose}
@@ -240,8 +303,8 @@ function App() {
           ) : (
             <button
               type="button"
-              onClick={handleInstall}
-              disabled={!token || processing || !hostname}
+              onClick={() => handleInstall()}
+              disabled={!config || processing || !hostname}
               className="
                 inline-flex items-center justify-center
                 rounded-md
@@ -263,7 +326,6 @@ function App() {
             </button>
           )}
         </div>
-        <pre>{JSON.stringify({ token, rustdeskId, hostname }, null, 2)}</pre>
       </form>
     </div>
   );
