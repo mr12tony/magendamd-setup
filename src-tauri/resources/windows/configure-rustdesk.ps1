@@ -32,7 +32,7 @@ $ErrorActionPreference = "Stop"
 $TargetVersion = "1.4.9"
 
 # Self-hosted configuration
-ы$RustDeskIdServer = "rustdesk.magendamd.com"
+$RustDeskIdServer = "rustdesk.magendamd.com"
 $RustDeskRelayServer = "rustdesk.magendamd.com"
 $RustDeskKey = "+Li02oekgNMPX9Aa6jPAJhJCE7Cuu6kmP1zB6nMpKMc="
 
