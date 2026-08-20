@@ -31,7 +31,7 @@
     DetailPrint "Installer path: $EXEPATH"
 
     ; Persistent application data directory
-    CreateDirectory "$PROGRAMDATA\Magendamd"
+    CreateDirectory "$COMMONAPPDATA\Magendamd"
 
 
     ; --------------------------------------------------------
@@ -44,7 +44,7 @@
 
     System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_INSTALLER", t "$EXEPATH") i .r0'
 
-    System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_TOKEN_FILE", t "$PROGRAMDATA\Magendamd\install.json") i .r0'
+    System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_TOKEN_FILE", t "$COMMONAPPDATA\Magendamd\install.json") i .r0'
 
 
     ; --------------------------------------------------------
@@ -87,11 +87,11 @@
 
     ${If} $2 == 0
 
-        ${If} ${FileExists} "$PROGRAMDATA\Magendamd\install.json"
+        ${If} ${FileExists} "$COMMONAPPDATA\Magendamd\install.json"
 
             DetailPrint "Installation token extracted successfully."
             DetailPrint "Token saved to:"
-            DetailPrint "$PROGRAMDATA\Magendamd\install.json"
+            DetailPrint "$COMMONAPPDATA\Magendamd\install.json"
 
         ${Else}
 
