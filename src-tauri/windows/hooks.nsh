@@ -30,21 +30,27 @@
 
     DetailPrint "Installer path: $EXEPATH"
 
-    ; Persistent application data directory
-    CreateDirectory "$COMMONAPPDATA\Magendamd"
+    ; --------------------------------------------------------
+    ; ProgramData
+    ;
+    ; With SetShellVarContext all:
+    ; $LOCALAPPDATA -> system-wide LocalAppData / ProgramData
+    ; --------------------------------------------------------
+
+    SetShellVarContext all
+
+    StrCpy $R9 "$LOCALAPPDATA\Magendamd"
+
+    CreateDirectory "$R9"
 
 
     ; --------------------------------------------------------
     ; Pass paths safely to PowerShell using environment vars.
-    ;
-    ; This avoids quoting problems with filenames such as:
-    ;
-    ; magendamd-setup-token (1).exe
     ; --------------------------------------------------------
 
     System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_INSTALLER", t "$EXEPATH") i .r0'
 
-    System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_TOKEN_FILE", t "$COMMONAPPDATA\Magendamd\install.json") i .r0'
+    System::Call 'Kernel32::SetEnvironmentVariable(t "MAGENDAMD_TOKEN_FILE", t "$R9\install.json") i .r0'
 
 
     ; --------------------------------------------------------
@@ -80,18 +86,15 @@
 
     ; --------------------------------------------------------
     ; Token extraction is optional.
-    ;
-    ; Do NOT abort RustDesk installation if filename does not
-    ; contain a token.
     ; --------------------------------------------------------
 
     ${If} $2 == 0
 
-        ${If} ${FileExists} "$COMMONAPPDATA\Magendamd\install.json"
+        ${If} ${FileExists} "$R9\install.json"
 
             DetailPrint "Installation token extracted successfully."
             DetailPrint "Token saved to:"
-            DetailPrint "$COMMONAPPDATA\Magendamd\install.json"
+            DetailPrint "$R9\install.json"
 
         ${Else}
 
@@ -145,18 +148,6 @@
 
     ; --------------------------------------------------------
     ; Run RustDesk deployment.
-    ;
-    ; configure-rustdesk.ps1 currently handles:
-    ;
-    ; - RustDesk detection
-    ; - x64 / ARM64 installer selection
-    ; - install/update to 1.4.9
-    ; - GUI shutdown
-    ; - Service management
-    ; - LocalService RustDesk2.toml
-    ; - user RustDesk2.toml
-    ; - password
-    ; - final verification
     ; --------------------------------------------------------
 
     DetailPrint "Running RustDesk deployment..."
@@ -247,8 +238,6 @@
 ; - uninstall MyApp
 ; - DO NOT uninstall RustDesk
 ; - DO NOT delete enrollment token yet
-;
-; We can change this later.
 ; ============================================================
 
 !macro NSIS_HOOK_PREUNINSTALL
