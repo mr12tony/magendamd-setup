@@ -4,12 +4,20 @@
     "version": "0.1.0",
     "identifier": "com.mr12tony.magendamd-setup",
     "bundle": {
-        "active": false,
+        "active": true,
+        "targets": [
+            "nsis"
+        ],
         "resources": [
-            "resources/windows/install.ps1",
-            "resources/windows/RustDesk2.toml",
-            "resources/windows/rustdesk-aarch64.exe",
-            "resources/windows/rustdesk-x86_64.exe"
-        ]
+            "resources/windows/rustdesk-1.4.9-x86_64.exe",
+            "resources/windows/rustdesk-1.4.9-aarch64.exe",
+            "resources/windows/configure-rustdesk.ps1"
+        ],
+        "windows": {
+            "nsis": {
+                "installMode": "perMachine",
+                "installerHooks": "./windows/hooks.nsh"
+            }
+        }
     }
 }
