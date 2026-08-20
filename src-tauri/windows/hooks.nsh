@@ -3,121 +3,57 @@
 !macro NSIS_HOOK_POSTINSTALL
 
     ; ========================================================
-    ; 1. EXTRACT INSTALL TOKEN
-    ;
-    ; Supported:
-    ;
-    ; magendamd-setup-abc123.exe
-    ; magendamd-setup-abc123 (1).exe
-    ; magendamd-setup-abc123 (2).exe
-    ;
-    ; Result:
-    ; abc123
-    ;
-    ; Saved to:
-    ; C:\ProgramData\Magendamd\install.json
-    ;
-    ; Token extraction failure does NOT abort installation.
+    ; 1. SAVE INSTALL TOKEN
     ; ========================================================
 
     DetailPrint ""
     DetailPrint "=========================================="
-    DetailPrint " Extracting installation token..."
+    DetailPrint " Processing installation token..."
     DetailPrint "=========================================="
 
-    DetailPrint "Installer path: $EXEPATH"
+    DetailPrint "Installer path:"
+    DetailPrint "$EXEPATH"
 
-    ; --------------------------------------------------------
-    ; ProgramData
-    ; --------------------------------------------------------
+    StrCpy $R0 "$INSTDIR\resources\windows\save-install-token.ps1"
 
-    SetShellVarContext all
+    ${IfNot} ${FileExists} "$R0"
 
-    StrCpy $R9 "$LOCALAPPDATA\Magendamd"
-
-    CreateDirectory "$R9"
-
-    DetailPrint "Token directory:"
-    DetailPrint "$R9"
-
-    ; --------------------------------------------------------
-    ; Extract token from installer filename
-    ;
-    ; PowerShell prints ONLY token to stdout.
-    ;
-    ; Examples:
-    ;
-    ; magendamd-setup-qwertyiop.exe
-    ; -> qwertyiop
-    ;
-    ; magendamd-setup-qwertyiop (2).exe
-    ; -> qwertyiop
-    ; --------------------------------------------------------
-
-    nsExec::ExecToStack \
-        'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$name=[System.IO.Path]::GetFileNameWithoutExtension(''$EXEPATH''); if($name -match ''^magendamd-setup-([A-Za-z0-9_-]+)(?: \(\d+\))?$''){ [Console]::Out.Write($Matches[1]); exit 0 } else { exit 2 }"'
-
-    ; first Pop = exit code
-    ; second Pop = stdout
-
-    Pop $R0
-    Pop $R1
-
-    DetailPrint "Token extraction exit code: $R0"
-
-    ; --------------------------------------------------------
-    ; If token found
-    ; --------------------------------------------------------
-
-    ${If} $R0 == 0
-
-        ${If} $R1 != ""
-
-            DetailPrint "Installation token extracted."
-
-            ; ------------------------------------------------
-            ; Write JSON directly from NSIS
-            ;
-            ; {"install_token":"qwertyiop"}
-            ; ------------------------------------------------
-
-            FileOpen $R2 "$R9\install.json" w
-
-            ${If} $R2 == ""
-
-                DetailPrint "WARNING: Could not open install.json."
-
-            ${Else}
-
-                FileWrite $R2 '{"install_token":"$R1"}'
-                FileClose $R2
-
-                ${If} ${FileExists} "$R9\install.json"
-
-                    DetailPrint "Installation token saved successfully."
-                    DetailPrint "Token file:"
-                    DetailPrint "$R9\install.json"
-
-                ${Else}
-
-                    DetailPrint "WARNING: install.json was not created."
-
-                ${EndIf}
-
-            ${EndIf}
-
-        ${Else}
-
-            DetailPrint "WARNING: Token extraction returned empty token."
-
-        ${EndIf}
+        DetailPrint "WARNING: save-install-token.ps1 not found."
+        DetailPrint "Continuing installation without token."
 
     ${Else}
 
-        DetailPrint "WARNING: Installation token was not found."
-        DetailPrint "Expected filename:"
-        DetailPrint "magendamd-setup-TOKEN.exe"
-        DetailPrint "Continuing installation without enrollment token."
+        ; ----------------------------------------------------
+        ; Pass installer path as a NORMAL script argument.
+        ;
+        ; This correctly handles:
+        ;
+        ; C:\Users\Alex\Downloads\
+        ; magendamd-setup-qwertyiop (1).exe
+        ; ----------------------------------------------------
+
+        nsExec::ExecToLog \
+            'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$R0" -InstallerPath "$EXEPATH"'
+
+        Pop $R1
+
+        DetailPrint "Token script exit code: $R1"
+
+        ${If} $R1 == 0
+
+            DetailPrint "Installation token saved successfully."
+
+        ${ElseIf} $R1 == 2
+
+            DetailPrint "WARNING: Installer filename contains no token."
+            DetailPrint "Continuing installation without token."
+
+        ${Else}
+
+            DetailPrint "WARNING: Could not save installation token."
+            DetailPrint "Continuing installation without token."
+
+        ${EndIf}
 
     ${EndIf}
 
@@ -133,10 +69,6 @@
 
     StrCpy $0 "$INSTDIR\resources\windows\configure-rustdesk.ps1"
 
-    ; --------------------------------------------------------
-    ; Verify PowerShell deployment script exists
-    ; --------------------------------------------------------
-
     ${IfNot} ${FileExists} "$0"
 
         MessageBox MB_ICONSTOP \
@@ -146,20 +78,12 @@
 
     ${EndIf}
 
-    ; --------------------------------------------------------
-    ; Run RustDesk deployment
-    ; --------------------------------------------------------
-
     DetailPrint "Running RustDesk deployment..."
 
     nsExec::ExecToLog \
         'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$0"'
 
     Pop $1
-
-    ; --------------------------------------------------------
-    ; RustDesk deployment is mandatory
-    ; --------------------------------------------------------
 
     ${If} $1 != 0
 
@@ -221,10 +145,6 @@
 
 !macroend
 
-
-; ============================================================
-; UNINSTALL
-; ============================================================
 
 !macro NSIS_HOOK_PREUNINSTALL
 
