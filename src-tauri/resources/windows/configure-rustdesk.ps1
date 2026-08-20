@@ -356,16 +356,22 @@ function Stop-RustDeskGui {
         Log "RustDesk Service PID: $servicePid"
     }
 
-    $processes = @(
-        Get-Process `
-            -Name "rustdesk" `
-            -ErrorAction SilentlyContinue
-    )
+    # ========================================================
+    # Snapshot of current RustDesk user processes
+    #
+    # Important:
+    # We only close processes that existed when this function
+    # started. RustDesk Service may spawn another user/helper
+    # process afterwards.
+    # ========================================================
 
     $guiProcesses = @(
-        $processes |
+        Get-Process `
+            -Name "rustdesk" `
+            -ErrorAction SilentlyContinue |
         Where-Object {
 
+            # Never touch Service PID.
             if (
                 $servicePid -and
                 $_.Id -eq $servicePid
@@ -373,7 +379,7 @@ function Stop-RustDeskGui {
                 return $false
             }
 
-            # Service lives in Session 0.
+            # Session 0 belongs to services/system processes.
             return $_.SessionId -ne 0
         }
     )
@@ -385,49 +391,129 @@ function Stop-RustDeskGui {
         return
     }
 
+    Log (
+        "Found $($guiProcesses.Count) " +
+        "RustDesk user process(es)."
+    )
+
+    # ========================================================
+    # Close only processes from the initial snapshot
+    # ========================================================
+
     foreach ($process in $guiProcesses) {
 
+        $pid = $process.Id
+
         Log (
-            "Closing RustDesk GUI: " +
-            "PID=$($process.Id), Session=$($process.SessionId)"
+            "Closing RustDesk GUI/user process: " +
+            "PID=$pid, Session=$($process.SessionId)"
         )
 
-        # Graceful close first.
+        # ----------------------------------------------------
+        # Graceful close
+        # ----------------------------------------------------
+
         try {
 
             if ($process.MainWindowHandle -ne 0) {
 
-                $null = $process.CloseMainWindow()
+                Log "Requesting graceful close: PID=$pid"
 
-                try {
-                    $process.WaitForExit(5000)
+                $closed = $process.CloseMainWindow()
+
+                Log "CloseMainWindow returned: $closed"
+
+                if ($closed) {
+
+                    try {
+                        $process.WaitForExit(3000)
+                    }
+                    catch {}
                 }
-                catch {}
+            }
+            else {
+
+                Log (
+                    "PID $pid has no main window. " +
+                    "Skipping graceful close."
+                )
             }
         }
-        catch {}
+        catch {
 
-        $remaining = Get-Process `
-            -Id $process.Id `
+            Log "Graceful close failed for PID=$pid"
+        }
+
+        # ----------------------------------------------------
+        # Is ORIGINAL process still alive?
+        # ----------------------------------------------------
+
+        $stillRunning = Get-Process `
+            -Id $pid `
             -ErrorAction SilentlyContinue
 
-        if ($remaining) {
+        if ($stillRunning) {
 
-            Log "GUI PID $($process.Id) still running. Force closing..."
+            Log (
+                "Original GUI PID $pid still running. " +
+                "Force closing..."
+            )
 
-            Stop-Process `
-                -Id $process.Id `
-                -Force `
-                -ErrorAction SilentlyContinue
+            try {
+
+                Stop-Process `
+                    -Id $pid `
+                    -Force `
+                    -ErrorAction Stop
+            }
+            catch {
+
+                Log (
+                    "Could not force-close PID $pid. " +
+                    "Continuing."
+                )
+            }
+        }
+
+        # ----------------------------------------------------
+        # Verify ORIGINAL PID only
+        # ----------------------------------------------------
+
+        Start-Sleep -Milliseconds 300
+
+        $stillRunning = Get-Process `
+            -Id $pid `
+            -ErrorAction SilentlyContinue
+
+        if ($stillRunning) {
+
+            Log (
+                "WARNING: original RustDesk PID $pid " +
+                "is still running."
+            )
+        }
+        else {
+
+            Log "Original RustDesk PID $pid stopped."
         }
     }
 
-    Start-Sleep -Milliseconds 750
+    # ========================================================
+    # Small stabilization delay
+    # ========================================================
 
-    # Verify
+    Start-Sleep -Seconds 1
+
+    # ========================================================
+    # Diagnostic only:
+    #
+    # RustDesk Service may spawn a new user/helper process.
+    # This is NOT considered an error.
+    # ========================================================
+
     $servicePid = Get-RustDeskServicePid
 
-    $remainingGui = @(
+    $newProcesses = @(
         Get-Process `
             -Name "rustdesk" `
             -ErrorAction SilentlyContinue |
@@ -444,20 +530,43 @@ function Stop-RustDeskGui {
         }
     )
 
-    if ($remainingGui.Count -gt 0) {
+    if ($newProcesses.Count -gt 0) {
 
-        foreach ($process in $remainingGui) {
+        foreach ($process in $newProcesses) {
 
             Log (
-                "Remaining GUI/helper PID=" +
-                "$($process.Id)"
+                "RustDesk user/helper currently present: " +
+                "PID=$($process.Id), " +
+                "Session=$($process.SessionId)"
             )
         }
 
-        Fail "RustDesk GUI could not be stopped."
+        Log (
+            "RustDesk Service may recreate user/helper " +
+            "processes. Continuing deployment."
+        )
+    }
+    else {
+
+        Log "No RustDesk user processes currently running."
     }
 
-    Log "RustDesk GUI stopped."
+    # ========================================================
+    # Critical verification:
+    #
+    # Service must still be alive.
+    # ========================================================
+
+    if (-not (Test-RustDeskServiceRunning)) {
+
+        Fail (
+            "RustDesk Service stopped unexpectedly " +
+            "while closing GUI."
+        )
+    }
+
+    Log "RustDesk GUI close phase completed."
+    Log "RustDesk Service remains RUNNING."
 }
 
 
