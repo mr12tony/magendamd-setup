@@ -8,54 +8,68 @@
 
     DetailPrint ""
     DetailPrint "=========================================="
-    DetailPrint " Processing installation token..."
+    DetailPrint " Saving installation token..."
     DetailPrint "=========================================="
 
-    DetailPrint "Installer path:"
+    DetailPrint "Installer EXE:"
     DetailPrint "$EXEPATH"
 
     StrCpy $R0 "$INSTDIR\resources\windows\save-install-token.ps1"
 
+    DetailPrint "Token script path:"
+    DetailPrint "$R0"
+
+    ; --------------------------------------------------------
+    ; Script MUST exist for this diagnostic build.
+    ; --------------------------------------------------------
+
     ${IfNot} ${FileExists} "$R0"
 
-        DetailPrint "WARNING: save-install-token.ps1 not found."
-        DetailPrint "Continuing installation without token."
+        DetailPrint "ERROR: save-install-token.ps1 not found."
 
-    ${Else}
+        MessageBox MB_ICONSTOP \
+            "save-install-token.ps1 NOT FOUND:$\r$\n$R0"
 
-        ; ----------------------------------------------------
-        ; Pass installer path as a NORMAL script argument.
-        ;
-        ; This correctly handles:
-        ;
-        ; C:\Users\Alex\Downloads\
-        ; magendamd-setup-qwertyiop (1).exe
-        ; ----------------------------------------------------
-
-        nsExec::ExecToLog \
-            'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$R0" -InstallerPath "$EXEPATH"'
-
-        Pop $R1
-
-        DetailPrint "Token script exit code: $R1"
-
-        ${If} $R1 == 0
-
-            DetailPrint "Installation token saved successfully."
-
-        ${ElseIf} $R1 == 2
-
-            DetailPrint "WARNING: Installer filename contains no token."
-            DetailPrint "Continuing installation without token."
-
-        ${Else}
-
-            DetailPrint "WARNING: Could not save installation token."
-            DetailPrint "Continuing installation without token."
-
-        ${EndIf}
+        Abort
 
     ${EndIf}
+
+    DetailPrint "Token script exists."
+
+    ; --------------------------------------------------------
+    ; Run token script.
+    ;
+    ; $EXEPATH is passed directly as InstallerPath.
+    ; Handles:
+    ;
+    ; magendamd-setup-qwertyiop.exe
+    ; magendamd-setup-qwertyiop (1).exe
+    ; magendamd-setup-qwertyiop (2).exe
+    ; --------------------------------------------------------
+
+    nsExec::ExecToLog \
+        'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$R0" -InstallerPath "$EXEPATH"'
+
+    Pop $R1
+
+    DetailPrint "Token script exit code: $R1"
+
+    ; --------------------------------------------------------
+    ; For now fail hard so we can diagnose this properly.
+    ; --------------------------------------------------------
+
+    ${If} $R1 != 0
+
+        DetailPrint "ERROR: Token script failed."
+
+        MessageBox MB_ICONSTOP \
+            "Token script failed.$\r$\n$\r$\nExit code: $R1$\r$\n$\r$\nInstaller:$\r$\n$EXEPATH"
+
+        Abort
+
+    ${EndIf}
+
+    DetailPrint "Token script completed successfully."
 
 
     ; ========================================================
