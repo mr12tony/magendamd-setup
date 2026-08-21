@@ -22,7 +22,7 @@ try {
 
     if (
         $fileName -notmatch
-        '^magendamd-setup-([A-Za-z0-9_-]+)(?: \(\d+\))?$'
+        '^(?:magendamd-setup|MagendaSupport)-([A-Za-z0-9_-]+)(?: \(\d+\))?$'
     ) {
         Write-Host "[Token] Token not found in filename."
         exit 2
