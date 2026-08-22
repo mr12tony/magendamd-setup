@@ -134,7 +134,7 @@ function App() {
   }, []);
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center gap-8">
+    <div className="relative flex min-h-screen flex-col items-center justify-center gap-4">
       {processing && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-4">
@@ -150,17 +150,17 @@ function App() {
             />
 
             <span className="text-sm font-medium text-white">
-              Registering RustDesk device...
+              Registering your device...
             </span>
           </div>
         </div>
       )}
 
-      <div className="relative select-none">
-        <img src="/logo-white.png" alt="App logo" className="h-18" />
+      <div className="flex flex-col justify-center items-center gap-2 select-none">
+        <img src="/magenda-support-logo.png" alt="Magenda Support" className="h-24" />
 
-        <div className="absolute right-0 -bottom-1.5 text-base font-medium tracking-[2px] text-white">
-          RustDesk Setup
+        <div className="text-2xl font-medium text-white">
+          Magenda Support
         </div>
       </div>
 
