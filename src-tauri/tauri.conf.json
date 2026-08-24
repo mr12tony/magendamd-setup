@@ -14,9 +14,9 @@
       {
         "title": "Magenda Support",
         "width": 480,
-        "height": 360,
+        "height": 400,
         "minWidth": 480,
-        "minHeight": 360
+        "minHeight": 400
       }
     ],
     "security": {
@@ -26,20 +26,28 @@
   "bundle": {
     "active": true,
     "targets": [
-        "nsis"
+      "nsis"
     ],
     "resources": [
-        "resources/windows/rustdesk-1.4.9-x86_64.exe",
-        "resources/windows/rustdesk-1.4.9-aarch64.exe",
-        "resources/windows/configure-rustdesk.ps1",
-        "resources/windows/save-install-token.ps1"
+      "resources/windows/rustdesk-1.4.9-x86_64.exe",
+      "resources/windows/rustdesk-1.4.9-aarch64.exe",
+      "resources/windows/configure-rustdesk.ps1"
     ],
     "windows": {
-        "nsis": {
-            "installMode": "perMachine",
-            "installerHooks": "./windows/hooks.nsh",
-            "installerIcon": "icons/icon.ico"
-        }
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "./windows/hooks.nsh",
+        "installerIcon": "icons/icon.ico"
+      }
     }
-}
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "magendasupport"
+        ]
+      }
+    }
+  }
 }

@@ -3,77 +3,7 @@
 !macro NSIS_HOOK_POSTINSTALL
 
     ; ========================================================
-    ; 1. SAVE INSTALL TOKEN
-    ; ========================================================
-
-    DetailPrint ""
-    DetailPrint "=========================================="
-    DetailPrint " Saving installation token..."
-    DetailPrint "=========================================="
-
-    DetailPrint "Installer EXE:"
-    DetailPrint "$EXEPATH"
-
-    StrCpy $R0 "$INSTDIR\resources\windows\save-install-token.ps1"
-
-    DetailPrint "Token script path:"
-    DetailPrint "$R0"
-
-    ; --------------------------------------------------------
-    ; Script MUST exist for this diagnostic build.
-    ; --------------------------------------------------------
-
-    ${IfNot} ${FileExists} "$R0"
-
-        DetailPrint "ERROR: save-install-token.ps1 not found."
-
-        MessageBox MB_ICONSTOP \
-            "save-install-token.ps1 NOT FOUND:$\r$\n$R0"
-
-        Abort
-
-    ${EndIf}
-
-    DetailPrint "Token script exists."
-
-    ; --------------------------------------------------------
-    ; Run token script.
-    ;
-    ; $EXEPATH is passed directly as InstallerPath.
-    ; Handles:
-    ;
-    ; magendamd-setup-qwertyiop.exe
-    ; magendamd-setup-qwertyiop (1).exe
-    ; magendamd-setup-qwertyiop (2).exe
-    ; --------------------------------------------------------
-
-    nsExec::ExecToLog \
-        'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$R0" -InstallerPath "$EXEPATH"'
-
-    Pop $R1
-
-    DetailPrint "Token script exit code: $R1"
-
-    ; --------------------------------------------------------
-    ; For now fail hard so we can diagnose this properly.
-    ; --------------------------------------------------------
-
-    ${If} $R1 != 0
-
-        DetailPrint "ERROR: Token script failed."
-
-        MessageBox MB_ICONSTOP \
-            "Token script failed.$\r$\n$\r$\nExit code: $R1$\r$\n$\r$\nInstaller:$\r$\n$EXEPATH"
-
-        Abort
-
-    ${EndIf}
-
-    DetailPrint "Token script completed successfully."
-
-
-    ; ========================================================
-    ; 2. RUSTDESK DEPLOYMENT
+    ; 1. RUSTDESK DEPLOYMENT
     ; ========================================================
 
     DetailPrint ""
@@ -117,7 +47,7 @@
 
 
     ; ========================================================
-    ; 3. START RUSTDESK GUI
+    ; 2. START RUSTDESK GUI
     ; ========================================================
 
     DetailPrint ""
