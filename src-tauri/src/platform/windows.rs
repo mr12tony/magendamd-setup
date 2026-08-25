@@ -19,8 +19,16 @@ const RUSTDESK_KEY: &str =
     "+Li02oekgNMPX9Aa6jPAJhJCE7Cuu6kmP1zB6nMpKMc=";
 
 #[derive(Debug, Deserialize, Serialize)]
-struct InstallConfig {
-    install_token: String,
+#[serde(rename_all = "lowercase")]
+pub enum InstallMode {
+    Dev,
+    Prod,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct InstallConfig {
+    pub install_token: String,
+    pub mode: InstallMode,
 }
 
 // ============================================================
@@ -42,23 +50,20 @@ fn install_config_path() -> Result<PathBuf, String> {
     )
 }
 
-pub fn get_install_token()
-    -> Result<Option<String>, String>
-{
+pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
     let path = install_config_path()?;
 
     if !path.exists() {
         return Ok(None);
     }
 
-    let content =
-        fs::read_to_string(&path)
-            .map_err(|e| {
-                format!(
-                    "Cannot read install config {}: {e}",
-                    path.display()
-                )
-            })?;
+    let content = fs::read_to_string(&path)
+        .map_err(|e| {
+            format!(
+                "Cannot read install config {}: {e}",
+                path.display()
+            )
+        })?;
 
     let config: InstallConfig =
         serde_json::from_str(&content)
@@ -68,24 +73,22 @@ pub fn get_install_token()
                 )
             })?;
 
-    let token =
-        config.install_token.trim();
-
-    if token.is_empty() {
+    if config.install_token.trim().is_empty() {
         return Ok(None);
     }
 
-    Ok(Some(token.to_string()))
+    Ok(Some(config))
 }
 
-pub fn save_install_token(
+pub fn save_install_config(
     token: &str,
+    mode: InstallMode,
 ) -> Result<(), String> {
     let token = token.trim();
 
     if token.is_empty() {
         return Err(
-            "Install token is empty.".to_string(),
+            "Install token is empty.".to_string()
         );
     }
 
@@ -99,19 +102,17 @@ pub fn save_install_token(
     {
         return Err(
             "Install token contains invalid characters."
-                .to_string(),
+                .to_string()
         );
     }
 
-    let path =
-        install_config_path()?;
+    let path = install_config_path()?;
 
-    let parent =
-        path.parent()
-            .ok_or_else(|| {
-                "Invalid install config path."
-                    .to_string()
-            })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| {
+            "Invalid install config path.".to_string()
+        })?;
 
     fs::create_dir_all(parent)
         .map_err(|e| {
@@ -123,13 +124,14 @@ pub fn save_install_token(
 
     let config = InstallConfig {
         install_token: token.to_string(),
+        mode,
     };
 
     let json =
-        serde_json::to_string(&config)
+        serde_json::to_string_pretty(&config)
             .map_err(|e| {
                 format!(
-                    "Failed to serialize install token: {e}"
+                    "Failed to serialize install config: {e}"
                 )
             })?;
 

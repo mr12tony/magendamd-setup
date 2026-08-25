@@ -38,18 +38,21 @@
 mod platform;
 
 #[tauri::command]
-fn get_install_token()
-    -> Result<Option<String>, String>
+fn get_install_config()
+    -> Result<Option<platform::InstallConfig>, String>
 {
-    platform::get_install_token()
+    platform::get_install_config()
 }
 
 #[tauri::command]
-fn save_install_token(
+fn save_install_config(
     token: String,
-) -> Result<(), String>
-{
-    platform::save_install_token(&token)
+    mode: platform::InstallMode,
+) -> Result<(), String> {
+    platform::save_install_config(
+        &token,
+        mode,
+    )
 }
 
 #[tauri::command]
@@ -108,8 +111,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             // get_install_token,
-            get_install_token,
-            save_install_token,
+            get_install_config,
+            save_install_config,
             get_rustdesk_id,
             get_rustdesk_status,
             get_rustdesk_permissions_status,

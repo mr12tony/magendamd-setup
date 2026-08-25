@@ -4,7 +4,7 @@ import { message, ask } from "@tauri-apps/plugin-dialog";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getSystemInfo } from "./system";
-import { getInstallTokenFromUrl } from "./deepLink";
+import { getInstallConfigFromUrl } from "./deepLink";
 
 import "./App.css";
 
@@ -28,6 +28,25 @@ type RegistrationData = {
   computerName: string;
   registeredAt: string;
 };
+
+type InstallMode = "dev" | "prod";
+
+type InstallConfig = {
+  install_token: string;
+  mode: InstallMode;
+};
+
+function getBackendUrl(mode: InstallMode) {
+  switch (mode) {
+    case "dev":
+      // return import.meta.env.VITE_BACKEND_DEV_URL;
+      return "https://apidev.magendamd.com/api/v1";
+
+    case "prod":
+      // return import.meta.env.VITE_BACKEND_PROD_URL;
+      return "https://api.magendamd.com/api/v1";
+  }
+}
 
 function App() {
   const [registration, setRegistration] = useState<RegistrationData | null>(
@@ -56,7 +75,9 @@ function App() {
 
   const [processing, setProcessing] = useState(false);
 
-  const [clinicToken, setClinicToken] = useState("");
+  const [installConfig, setInstallConfig] = useState<InstallConfig | null>(
+    null,
+  );
 
   const [currentRustdeskId, setCurrentRustdeskId] = useState("");
 
@@ -117,12 +138,12 @@ function App() {
       // TOKEN
       // ========================================
 
-      const installToken = await invoke<string | null>("get_install_token");
+      const config = await invoke<InstallConfig | null>("get_install_config");
 
-      if (installToken?.trim()) {
-        setClinicToken(installToken.trim());
+      if (config?.install_token?.trim()) {
+        setInstallConfig(config);
       } else {
-        setClinicToken("");
+        setInstallConfig(null);
 
         await handleMissingInstallToken();
       }
@@ -163,8 +184,8 @@ function App() {
   // REGISTER DEVICE
   // ============================================================
 
-  async function registerDevice(token: string) {
-    const cleanToken = token.trim();
+  async function registerDevice(config: InstallConfig) {
+    const cleanToken = config.install_token.trim();
 
     if (!cleanToken) {
       throw new Error("Installation token is missing.");
@@ -191,24 +212,22 @@ function App() {
     const rustdeskId = rustdeskStatus.id!.trim();
 
     setStatus(rustdeskStatus);
-
     setCurrentRustdeskId(rustdeskId);
 
-    const response = await fetch(
-      `${import.meta.env.VITE_BACKEND_URL}/rustdesk/devices`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-RustDesk-Key": cleanToken,
-        },
-        body: JSON.stringify({
-          device_id: rustdeskId,
-          password: import.meta.env.VITE_PERMANENT_PASSWORD,
-          name: cleanComputerName,
-        }),
+    const backendUrl = getBackendUrl(config.mode);
+
+    const response = await fetch(`${backendUrl}/rustdesk/devices`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-RustDesk-Key": cleanToken,
       },
-    );
+      body: JSON.stringify({
+        device_id: rustdeskId,
+        password: import.meta.env.VITE_PERMANENT_PASSWORD,
+        name: cleanComputerName,
+      }),
+    });
 
     if (!response.ok) {
       let serverMessage = "";
@@ -247,14 +266,14 @@ function App() {
   // ============================================================
 
   async function handleRegister() {
-    if (!clinicToken || !computerName.trim()) {
+    if (!installConfig || !computerName.trim()) {
       return;
     }
 
     try {
       setProcessing(true);
 
-      await registerDevice(clinicToken);
+      await registerDevice(installConfig);
 
       await message("This device has been successfully connected to support.", {
         title: "Device registered",
@@ -278,27 +297,30 @@ function App() {
 
   async function handleDeepLinks(urls: string[]) {
     for (const url of urls) {
-      const token = getInstallTokenFromUrl(url);
+      const deepLinkConfig = getInstallConfigFromUrl(url);
 
-      if (!token) {
+      if (!deepLinkConfig) {
         continue;
       }
 
       try {
         setProcessing(true);
 
-        console.log("Received install token from deep link.");
+        console.log("Received install config from deep link.");
 
-        // Сохраняем token локально.
-        await invoke("save_install_token", {
-          token,
+        const config: InstallConfig = {
+          install_token: deepLinkConfig.token,
+          mode: deepLinkConfig.mode,
+        };
+
+        await invoke("save_install_config", {
+          token: config.install_token,
+          mode: config.mode,
         });
 
-        setClinicToken(token);
+        setInstallConfig(config);
 
-        // Автоматически регистрируем
-        // устройство после deep link.
-        await registerDevice(token);
+        await registerDevice(config);
 
         await message(
           "This device has been successfully connected to support.",
@@ -371,7 +393,9 @@ function App() {
       return;
     }
 
-    await openUrl(`${import.meta.env.VITE_FRONTEND_URL}?install=rustdesk`);
+    await openUrl(
+      `${installConfig?.mode === "dev" ? "https://dev.magendamd.com" : "https://app.magendamd.com"}?install=rustdesk`,
+    );
   }
 
   // ============================================================
@@ -571,7 +595,7 @@ function App() {
                   type="button"
                   onClick={handleRegister}
                   disabled={
-                    !clinicToken ||
+                    !installConfig ||
                     processing ||
                     !computerName.trim() ||
                     !currentRustdeskId
@@ -699,24 +723,6 @@ function App() {
             Check again
           </button>
         </div> */}
-
-        {import.meta.env.DEV && (
-          <pre className="max-w-full overflow-auto text-xs text-white">
-            {JSON.stringify(
-              {
-                registration,
-                computerName,
-                clinicToken,
-                currentRustdeskId,
-                supportMessage,
-                permissions,
-                status,
-              },
-              null,
-              2,
-            )}
-          </pre>
-        )}
       </div>
     </div>
   );
