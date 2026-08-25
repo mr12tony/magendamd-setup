@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { message } from "@tauri-apps/plugin-dialog";
+import { message, ask } from "@tauri-apps/plugin-dialog";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
-
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getSystemInfo } from "./system";
 import { getInstallTokenFromUrl } from "./deepLink";
 
@@ -113,27 +113,27 @@ function App() {
 
   async function initialize() {
     try {
-      // --------------------------------------------------------
-      // Install token
-      // --------------------------------------------------------
+      // ========================================
+      // TOKEN
+      // ========================================
 
       const installToken = await invoke<string | null>("get_install_token");
 
       if (installToken?.trim()) {
         setClinicToken(installToken.trim());
+      } else {
+        setClinicToken("");
+
+        await handleMissingInstallToken();
       }
 
-      // --------------------------------------------------------
-      // RustDesk status
-      // --------------------------------------------------------
+      // ========================================
+      // RUSTDESK
+      // ========================================
 
       let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
 
       if (!isRustDeskHealthy(rustdeskStatus)) {
-        console.log(
-          "RustDesk is not healthy. Starting repair/configuration...",
-        );
-
         await invoke("configure_rustdesk");
 
         rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
@@ -147,16 +147,10 @@ function App() {
 
       setCurrentRustdeskId(rustdeskStatus.id!.trim());
     } catch (err) {
-      // Не сбрасываем clinicToken:
-      // ошибка RustDesk не означает,
-      // что install token недействителен.
-
       setCurrentRustdeskId("");
       setStatus(null);
 
       const msg = getErrorMessage(err, "Failed to initialize the application.");
-
-      console.error("Initialization failed:", err);
 
       await message(msg, {
         title: "Configuration error",
@@ -356,6 +350,28 @@ function App() {
     // TODO:
     // POST support request
     //
+  }
+
+  // ============================================================
+  // MISSING TOKEN
+  // ============================================================
+
+  async function handleMissingInstallToken() {
+    const openPlatform = await ask(
+      "This device is not linked to your Magenda account yet.\n\nOpen the Magenda platform in your browser, then click “Open MagendaSupport” on the platform to send the registration link to this application.",
+      {
+        title: "Device registration required",
+        kind: "info",
+        okLabel: "Open Platform",
+        cancelLabel: "Not Now",
+      },
+    );
+
+    if (!openPlatform) {
+      return;
+    }
+
+    await openUrl(`${import.meta.env.VITE_FRONTEND_URL}?install=rustdesk`);
   }
 
   // ============================================================
