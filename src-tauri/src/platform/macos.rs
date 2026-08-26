@@ -25,6 +25,7 @@ const RUSTDESK_KEY: &str = "+Li02oekgNMPX9Aa6jPAJhJCE7Cuu6kmP1zB6nMpKMc=";
 pub enum InstallMode {
     Dev,
     Prod,
+    Local,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

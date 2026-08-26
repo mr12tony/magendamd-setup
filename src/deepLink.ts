@@ -1,4 +1,4 @@
-export type InstallMode = "dev" | "prod";
+export type InstallMode = "dev" | "prod" | "local";
 
 export type InstallDeepLink = {
   token: string;
@@ -21,7 +21,7 @@ export function getInstallConfigFromUrl(value: string): InstallDeepLink | null {
       return null;
     }
 
-    if (mode !== "dev" && mode !== "prod") {
+    if (mode !== "dev" && mode !== "prod" && mode !== "local") {
       return null;
     }
 

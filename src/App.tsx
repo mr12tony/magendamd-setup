@@ -29,7 +29,7 @@ type RegistrationData = {
   registeredAt: string;
 };
 
-type InstallMode = "dev" | "prod";
+type InstallMode = "dev" | "prod" | "local";
 
 type InstallConfig = {
   install_token: string;
@@ -39,12 +39,26 @@ type InstallConfig = {
 function getBackendUrl(mode: InstallMode) {
   switch (mode) {
     case "dev":
-      // return import.meta.env.VITE_BACKEND_DEV_URL;
       return "https://apidev.magendamd.com/api/v1";
 
     case "prod":
-      // return import.meta.env.VITE_BACKEND_PROD_URL;
       return "https://api.magendamd.com/api/v1";
+
+    case "local":
+      return "http://127.0.0.1:8000/api/v1";
+  }
+}
+
+function getFrontendUrl(mode: InstallMode = "prod") {
+  switch (mode) {
+    case "dev":
+      return "https://dev.magendamd.com";
+
+    case "prod":
+      return "https://app.magendamd.com";
+
+    case "local":
+      return "http://127.0.0.1:3000";
   }
 }
 
@@ -350,28 +364,118 @@ function App() {
   // OPEN RUSTDESK
   // ============================================================
 
-  async function handleOpenRustDesk() {
-    try {
-      await invoke("open_rustdesk");
-    } catch (err) {
-      const msg = getErrorMessage(err, "Failed to open RustDesk.");
+  // async function handleOpenRustDesk() {
+  //   try {
+  //     await invoke("open_rustdesk");
+  //   } catch (err) {
+  //     const msg = getErrorMessage(err, "Failed to open RustDesk.");
 
-      await message(msg, {
-        title: "RustDesk",
-        kind: "error",
-      });
-    }
-  }
+  //     await message(msg, {
+  //       title: "RustDesk",
+  //       kind: "error",
+  //     });
+  //   }
+  // }
 
   // ============================================================
   // SUPPORT REQUEST
   // ============================================================
 
   async function handleRequest() {
-    //
-    // TODO:
-    // POST support request
-    //
+    const cleanMessage = supportMessage.trim();
+
+    if (!cleanMessage) {
+      await message("Please describe your issue.", {
+        title: "Support request",
+        kind: "warning",
+      });
+
+      return;
+    }
+
+    if (!installConfig) {
+      await message("Installation configuration is missing.", {
+        title: "Support request error",
+        kind: "error",
+      });
+
+      return;
+    }
+
+    const cleanToken = installConfig.install_token?.trim();
+
+    if (!cleanToken) {
+      await message("Installation token is missing.", {
+        title: "Support request error",
+        kind: "error",
+      });
+
+      return;
+    }
+
+    try {
+      setProcessing(true);
+
+      const backendUrl = getBackendUrl(installConfig.mode);
+
+      // Добавляем RustDesk deep link к сообщению.
+      const formattedMessage = `${cleanMessage}
+
+rustdesk://${currentRustdeskId.trim()}`;
+
+      const response = await fetch(`${backendUrl}/rustdesk/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-RustDesk-Key": cleanToken,
+        },
+        body: JSON.stringify({
+          message: formattedMessage,
+          device_id: currentRustdeskId,
+          name: computerName.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        let serverMessage = "";
+
+        try {
+          const data = await response.json();
+
+          serverMessage = data?.message || data?.error || "";
+        } catch {
+          try {
+            serverMessage = await response.text();
+          } catch {
+            //
+          }
+        }
+
+        throw new Error(
+          serverMessage ||
+            `Failed to send support request. Server returned HTTP ${response.status}.`,
+        );
+      }
+
+      // Очищаем сообщение только после успешной отправки.
+      setSupportMessage("");
+
+      await message("Your support request has been sent successfully.", {
+        title: "Support request sent",
+        kind: "info",
+      });
+    } catch (err) {
+      console.error("Failed to send support request:", err);
+
+      const msg = getErrorMessage(err, "Failed to send support request.");
+
+      await message(msg, {
+        title: "Support request error",
+        kind: "error",
+      });
+    } finally {
+      setProcessing(false);
+    }
   }
 
   // ============================================================
@@ -393,9 +497,7 @@ function App() {
       return;
     }
 
-    await openUrl(
-      `${installConfig?.mode === "dev" ? "https://dev.magendamd.com" : "https://app.magendamd.com"}?install=rustdesk`,
-    );
+    await openUrl(`${getFrontendUrl(installConfig?.mode)}?install=rustdesk`);
   }
 
   // ============================================================
@@ -536,7 +638,10 @@ function App() {
                 type="button"
                 onClick={handleRequest}
                 disabled={
-                  processing || !supportMessage.trim() || !currentRustdeskId
+                  processing ||
+                  !supportMessage.trim() ||
+                  !currentRustdeskId ||
+                  !installConfig
                 }
                 className="
                   ms-auto
@@ -560,7 +665,7 @@ function App() {
                   disabled:opacity-50
                 "
               >
-                Request Support
+                {processing ? "Sending..." : "Request Support"}
               </button>
             </>
           ) : (
