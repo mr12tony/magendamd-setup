@@ -8,6 +8,12 @@ import { getInstallConfigFromUrl } from "./deepLink";
 
 import "./App.css";
 
+type UpdateInfo = {
+  available: boolean;
+  version: string | null;
+  notes: string | null;
+};
+
 type RustDeskPermissionsStatus = {
   accessibility: boolean;
   screen_recording: boolean;
@@ -99,6 +105,42 @@ function App() {
     useState<RustDeskPermissionsStatus | null>(null);
 
   const [status, setStatus] = useState<RustDeskStatus | null>(null);
+
+  async function checkForUpdates() {
+    try {
+      const update = await invoke<UpdateInfo>("check_for_updates");
+
+      if (!update.available) {
+        console.log("Application is up to date.");
+
+        return;
+      }
+
+      const install = await ask(
+        `Magenda Support ${update.version} is available.${
+          update.notes ? `\n\n${update.notes}` : ""
+        }\n\nInstall the update now?`,
+        {
+          title: "Update available",
+          kind: "info",
+          okLabel: "Update",
+          cancelLabel: "Later",
+        },
+      );
+
+      if (!install) {
+        return;
+      }
+
+      setProcessing(true);
+
+      await invoke("download_and_install_update");
+    } catch (err) {
+      console.error("Updater failed:", err);
+    } finally {
+      setProcessing(false);
+    }
+  }
 
   // ============================================================
   // HELPERS
@@ -564,6 +606,14 @@ rustdesk://${currentRustdeskId.trim()}`;
     return () => {
       unlisten?.();
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      checkForUpdates();
+    }, 5000);
+
+    return () => clearTimeout(timer);
   }, []);
 
   // ============================================================

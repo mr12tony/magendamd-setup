@@ -35,24 +35,25 @@
 //     Ok(config.install_token)
 // }
 
+use tauri_plugin_updater::UpdaterExt;
+
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    available: bool,
+    version: Option<String>,
+    notes: Option<String>,
+}
+
 mod platform;
 
 #[tauri::command]
-fn get_install_config()
-    -> Result<Option<platform::InstallConfig>, String>
-{
+fn get_install_config() -> Result<Option<platform::InstallConfig>, String> {
     platform::get_install_config()
 }
 
 #[tauri::command]
-fn save_install_config(
-    token: String,
-    mode: platform::InstallMode,
-) -> Result<(), String> {
-    platform::save_install_config(
-        &token,
-        mode,
-    )
+fn save_install_config(token: String, mode: platform::InstallMode) -> Result<(), String> {
+    platform::save_install_config(&token, mode)
 }
 
 #[tauri::command]
@@ -95,9 +96,133 @@ fn open_rustdesk() -> Result<(), String> {
     platform::open_rustdesk()
 }
 
+#[tauri::command]
+async fn check_for_updates(
+    app: tauri::AppHandle,
+) -> Result<UpdateInfo, String> {
+    let config = platform::get_install_config()?
+        .ok_or_else(|| {
+            "Install configuration is missing.".to_string()
+        })?;
+
+    let endpoint = match config.mode {
+        platform::InstallMode::Dev => {
+            "https://dev.magendamd.com/api/app-updates/{{target}}/{{arch}}/{{current_version}}"
+        }
+
+        platform::InstallMode::Prod => {
+            "https://app.magendamd.com/api/app-updates/{{target}}/{{arch}}/{{current_version}}"
+        }
+
+        platform::InstallMode::Local => {
+            "http://127.0.0.1:3000/api/app-updates/{{target}}/{{arch}}/{{current_version}}"
+        }
+    };
+
+    let endpoint = endpoint
+        .parse()
+        .map_err(|e| {
+            format!("Invalid updater endpoint: {e}")
+        })?;
+
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match update {
+        Some(update) => {
+            Ok(UpdateInfo {
+                available: true,
+                version: Some(
+                    update.version.clone(),
+                ),
+                notes: update.body.clone(),
+            })
+        }
+
+        None => {
+            Ok(UpdateInfo {
+                available: false,
+                version: None,
+                notes: None,
+            })
+        }
+    }
+}
+
+#[tauri::command]
+async fn download_and_install_update(
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let config = platform::get_install_config()?
+        .ok_or_else(|| {
+            "Install configuration is missing.".to_string()
+        })?;
+
+    let endpoint = match config.mode {
+        platform::InstallMode::Dev => {
+            "https://dev.magendamd.com/api/app-updates/{{target}}/{{arch}}/{{current_version}}"
+        }
+
+        platform::InstallMode::Prod => {
+            "https://app.magendamd.com/api/app-updates/{{target}}/{{arch}}/{{current_version}}"
+        }
+
+        platform::InstallMode::Local => {
+            "http://127.0.0.1:3000/api/app-updates/{{target}}/{{arch}}/{{current_version}}"
+        }
+    };
+
+    let endpoint = endpoint
+        .parse()
+        .map_err(|e| {
+            format!("Invalid updater endpoint: {e}")
+        })?;
+
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let Some(update) = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+
+    update
+        .download_and_install(
+            |_chunk_length, _content_length| {
+                // при желании потом добавим progress channel
+            },
+            || {
+                println!("Update download finished.");
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    app.restart();
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|_app, argv, _cwd| {
           println!("a new app instance was opened with {argv:?} and the deep link event was already triggered");
           // when defining deep link schemes at runtime, you must also check `argv` here
@@ -117,6 +242,8 @@ pub fn run() {
             get_rustdesk_status,
             get_rustdesk_permissions_status,
             configure_rustdesk,
+            check_for_updates,
+            download_and_install_update,
             open_rustdesk,
             open_accessibility_settings,
             open_screen_recording_settings,

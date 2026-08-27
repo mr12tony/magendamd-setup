@@ -4,8 +4,7 @@ use super::RustDeskStatus;
 use serde::{Deserialize, Serialize};
 
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -39,18 +38,13 @@ pub struct InstallConfig {
 // ============================================================
 
 fn install_config_path() -> Result<PathBuf, String> {
-    let home = env::var("HOME")
-        .map_err(|_| {
-            "HOME environment variable not found".to_string()
-        })?;
+    let home = env::var("HOME").map_err(|_| "HOME environment variable not found".to_string())?;
 
-    Ok(
-        PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("MagendaSupport")
-            .join("install.json"),
-    )
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("MagendaSupport")
+        .join("install.json"))
 }
 
 pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
@@ -61,20 +55,10 @@ pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
     }
 
     let content = fs::read_to_string(&path)
-        .map_err(|e| {
-            format!(
-                "Cannot read install config {}: {e}",
-                path.display()
-            )
-        })?;
+        .map_err(|e| format!("Cannot read install config {}: {e}", path.display()))?;
 
     let config: InstallConfig =
-        serde_json::from_str(&content)
-            .map_err(|e| {
-                format!(
-                    "Invalid install config: {e}"
-                )
-            })?;
+        serde_json::from_str(&content).map_err(|e| format!("Invalid install config: {e}"))?;
 
     if config.install_token.trim().is_empty() {
         return Ok(None);
@@ -83,68 +67,38 @@ pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
     Ok(Some(config))
 }
 
-pub fn save_install_config(
-    token: &str,
-    mode: InstallMode,
-) -> Result<(), String> {
+pub fn save_install_config(token: &str, mode: InstallMode) -> Result<(), String> {
     let token = token.trim();
 
     if token.is_empty() {
-        return Err(
-            "Install token is empty.".to_string()
-        );
+        return Err("Install token is empty.".to_string());
     }
 
     if !token
         .chars()
-        .all(|c| {
-            c.is_ascii_alphanumeric()
-                || c == '-'
-                || c == '_'
-        })
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Err(
-            "Install token contains invalid characters."
-                .to_string()
-        );
+        return Err("Install token contains invalid characters.".to_string());
     }
 
     let path = install_config_path()?;
 
     let parent = path
         .parent()
-        .ok_or_else(|| {
-            "Invalid install config path.".to_string()
-        })?;
+        .ok_or_else(|| "Invalid install config path.".to_string())?;
 
     fs::create_dir_all(parent)
-        .map_err(|e| {
-            format!(
-                "Failed to create {}: {e}",
-                parent.display()
-            )
-        })?;
+        .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
 
     let config = InstallConfig {
         install_token: token.to_string(),
         mode,
     };
 
-    let json =
-        serde_json::to_string_pretty(&config)
-            .map_err(|e| {
-                format!(
-                    "Failed to serialize install config: {e}"
-                )
-            })?;
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize install config: {e}"))?;
 
-    fs::write(&path, json)
-        .map_err(|e| {
-            format!(
-                "Failed to write {}: {e}",
-                path.display()
-            )
-        })?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
 
     Ok(())
 }

@@ -15,6 +15,8 @@
     "fs:default",
     "log:default",
     "deep-link:default",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "fs:allow-exists",
       "allow": [

@@ -40,7 +40,7 @@ ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Paths
 # ============================================================
 
-BASE_APP="$ROOT/src-tauri/target/release/bundle/macos/MagendaSupport.app"
+BASE_APP="$ROOT/src-tauri/target/universal-apple-darwin/release/bundle/macos/MagendaSupport.app"
 
 DIST="$ROOT/dist/macos"
 
