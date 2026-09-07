@@ -10,6 +10,7 @@
             "resources/windows/configure-rustdesk.ps1"
         ],
         "windows": {
+            "signCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ../scripts/windows/sign-artifact.ps1 %1",
             "nsis": {
                 "installMode": "perMachine",
                 "installerHooks": "./windows/hooks.nsh",
