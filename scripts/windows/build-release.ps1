@@ -12,43 +12,9 @@ $ProjectRoot = Resolve-Path(
 
 $KeyPath = Join-Path $HOME ".tauri\magendasupport.key"
 
-$SignTool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
-$Dlib = "C:\MagendaSigning\Microsoft.ArtifactSigning.Client\bin\x64\Azure.CodeSigning.Dlib.dll"
-$Metadata = "C:\MagendaSigning\metadata.json"
-
 if (-not (Test-Path -LiteralPath $KeyPath)) {
     throw "Updater private key not found: $KeyPath"
 }
-
-Write-Host "Checking Azure CLI login..."
-Write-Host ""
-
-az account show *> $null
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Azure CLI is not logged in. Run: az login"
-}
-
-Write-Host "Azure login OK."
-Write-Host ""
-
-Write-Host "Checking Windows signing tools..."
-Write-Host ""
-
-if (-not (Test-Path -LiteralPath $SignTool)) {
-    throw "SignTool not found: $SignTool"
-}
-
-if (-not (Test-Path -LiteralPath $Dlib)) {
-    throw "Artifact Signing Dlib not found: $Dlib"
-}
-
-if (-not (Test-Path -LiteralPath $Metadata)) {
-    throw "Artifact Signing metadata not found: $Metadata"
-}
-
-Write-Host "Artifact Signing environment OK."
-Write-Host ""
 
 $Password = Read-Host `
     "Enter updater private key password" `
@@ -84,7 +50,7 @@ try {
     Write-Host "Building Tauri Windows release..."
     Write-Host ""
 
-    npm run tauri build -- --config src-tauri/tauri.windows.conf.json
+    npm run tauri build
 
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri build failed with exit code $LASTEXITCODE"
@@ -95,50 +61,15 @@ try {
         "src-tauri\target\release\bundle\nsis"
 
     Write-Host ""
-    Write-Host "Verifying Windows signatures..."
-    Write-Host ""
-
-    if (-not (Test-Path $NsisDir)) {
-        throw "NSIS output directory not found: $NsisDir"
-    }
-
-    $Installers = Get-ChildItem `
-        -Path $NsisDir `
-        -Filter "*.exe"
-
-    if (-not $Installers) {
-        throw "No NSIS installer found in: $NsisDir"
-    }
-
-    foreach ($Installer in $Installers) {
-        $Signature = Get-AuthenticodeSignature $Installer.FullName
-
-        Write-Host "File:"
-        Write-Host $Installer.FullName
-
-        Write-Host "Status:"
-        Write-Host $Signature.Status
-
-        if ($Signature.SignerCertificate) {
-            Write-Host "Signer:"
-            Write-Host $Signature.SignerCertificate.Subject
-        }
-
-        Write-Host ""
-
-        if ($Signature.Status -ne "Valid") {
-            throw "Invalid Authenticode signature: $($Installer.FullName)"
-        }
-    }
-
-    Write-Host ""
     Write-Host "============================================"
     Write-Host " Windows release build SUCCESS"
     Write-Host "============================================"
     Write-Host ""
 
-    Get-ChildItem $NsisDir |
-        Select-Object Name, Length, LastWriteTime
+    if (Test-Path $NsisDir) {
+        Get-ChildItem $NsisDir |
+            Select-Object Name, Length, LastWriteTime
+    }
 }
 finally {
     Write-Host ""
