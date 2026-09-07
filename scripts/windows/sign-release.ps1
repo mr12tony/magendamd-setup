@@ -27,6 +27,13 @@ $Dlib = `
 $Metadata = `
     "C:\MagendaSigning\metadata.json"
 
+$AzureCliDir = `
+    "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin"
+
+$AzureCli = Join-Path `
+    $AzureCliDir `
+    "az.cmd"
+
 
 # ------------------------------------------------------------
 # Check files
@@ -51,6 +58,23 @@ if (-not (Test-Path -LiteralPath $Metadata)) {
 if (-not (Test-Path -LiteralPath $KeyPath)) {
     throw "Updater private key not found: $KeyPath"
 }
+
+if (-not (Test-Path -LiteralPath $AzureCli)) {
+    throw "Azure CLI not found: $AzureCli"
+}
+
+
+# ------------------------------------------------------------
+# Make Azure CLI available to Dlib
+# ------------------------------------------------------------
+
+if (($env:PATH -split ";") -notcontains $AzureCliDir) {
+    $env:PATH = "$AzureCliDir;$env:PATH"
+}
+
+Write-Host "Azure CLI:"
+Write-Host $AzureCli
+Write-Host ""
 
 
 # ------------------------------------------------------------
@@ -82,7 +106,7 @@ Write-Host ""
 Write-Host "Checking Azure CLI login..."
 Write-Host ""
 
-az account show *> $null
+& $AzureCli account show *> $null
 
 if ($LASTEXITCODE -ne 0) {
     throw "Azure CLI is not logged in. Run: az login"
