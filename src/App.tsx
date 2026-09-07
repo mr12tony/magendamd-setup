@@ -188,7 +188,7 @@ function App() {
   // INITIALIZE
   // ============================================================
 
-  async function initialize() {
+  async function initialize(skipMissingTokenDialog = false) {
     try {
       // ========================================
       // TOKEN
@@ -201,7 +201,9 @@ function App() {
       } else {
         setInstallConfig(null);
 
-        await handleMissingInstallToken();
+        if (!skipMissingTokenDialog) {
+          await handleMissingInstallToken();
+        }
       }
 
       // ========================================
@@ -221,7 +223,6 @@ function App() {
       }
 
       setStatus(rustdeskStatus);
-
       setCurrentRustdeskId(rustdeskStatus.id!.trim());
     } catch (err) {
       setCurrentRustdeskId("");
@@ -576,31 +577,46 @@ rustdesk://${currentRustdeskId.trim()}`;
     let unlisten: (() => void) | undefined;
 
     (async () => {
-      // Сначала поднимаем RustDesk
-      // и читаем существующий token.
-      await initialize();
+      try {
+        // --------------------------------------------------------
+        // СНАЧАЛА проверяем, было ли приложение запущено
+        // через deep link.
+        // --------------------------------------------------------
 
-      // Проверяем permissions.
-      await checkPermissions();
+        const urls = await getCurrent();
 
-      // --------------------------------------------------------
-      // Приложение было запущено через deep link.
-      // --------------------------------------------------------
+        const hasInstallDeepLink =
+          urls?.some((url) => getInstallConfigFromUrl(url) !== null) ?? false;
 
-      const urls = await getCurrent();
+        // --------------------------------------------------------
+        // Инициализируем RustDesk.
+        //
+        // Если приложение запущено через deep link,
+        // НЕ показываем Missing Token dialog.
+        // --------------------------------------------------------
 
-      if (urls?.length) {
-        await handleDeepLinks(urls);
+        await initialize(hasInstallDeepLink);
+
+        await checkPermissions();
+
+        // --------------------------------------------------------
+        // Теперь обрабатываем cold-start deep link.
+        // --------------------------------------------------------
+
+        if (urls?.length) {
+          await handleDeepLinks(urls);
+        }
+
+        // --------------------------------------------------------
+        // Приложение уже работает, пользователь нажал deep link.
+        // --------------------------------------------------------
+
+        unlisten = await onOpenUrl(async (urls) => {
+          await handleDeepLinks(urls);
+        });
+      } catch (err) {
+        console.error("Application startup failed:", err);
       }
-
-      // --------------------------------------------------------
-      // Приложение уже запущено,
-      // а пользователь нажал deep link.
-      // --------------------------------------------------------
-
-      unlisten = await onOpenUrl(async (urls) => {
-        await handleDeepLinks(urls);
-      });
     })();
 
     return () => {
