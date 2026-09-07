@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { message, ask } from "@tauri-apps/plugin-dialog";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getSystemInfo } from "./system";
 import { getInstallConfigFromUrl } from "./deepLink";
 
@@ -94,6 +95,8 @@ function App() {
   const [supportMessage, setSupportMessage] = useState("");
 
   const [processing, setProcessing] = useState(false);
+
+  const [missingInstallToken, setMissingInstallToken] = useState(false);
 
   const [installConfig, setInstallConfig] = useState<InstallConfig | null>(
     null,
@@ -188,7 +191,7 @@ function App() {
   // INITIALIZE
   // ============================================================
 
-  async function initialize(skipMissingTokenDialog = false) {
+  async function initialize(skipMissingTokenScreen = false) {
     try {
       // ========================================
       // TOKEN
@@ -198,11 +201,18 @@ function App() {
 
       if (config?.install_token?.trim()) {
         setInstallConfig(config);
+        setMissingInstallToken(false);
       } else {
         setInstallConfig(null);
 
-        if (!skipMissingTokenDialog) {
-          await handleMissingInstallToken();
+        localStorage.removeItem("device_registration");
+        setRegistration(null);
+
+        if (skipMissingTokenScreen) {
+          setMissingInstallToken(false);
+        } else {
+          setMissingInstallToken(true);
+          return;
         }
       }
 
@@ -376,6 +386,7 @@ function App() {
         });
 
         setInstallConfig(config);
+        setMissingInstallToken(false);
 
         await registerDevice(config);
 
@@ -525,22 +536,43 @@ rustdesk://${currentRustdeskId.trim()}`;
   // MISSING TOKEN
   // ============================================================
 
-  async function handleMissingInstallToken() {
-    const openPlatform = await ask(
-      "This device is not linked to your Magenda account yet.\n\nOpen the Magenda platform in your browser, then click “Open MagendaSupport” on the platform to send the registration link to this application.",
-      {
-        title: "Device registration required",
-        kind: "info",
-        okLabel: "Open Platform",
-        cancelLabel: "Not Now",
-      },
-    );
+  // async function handleMissingInstallToken() {
+  //   const openPlatform = await ask(
+  //     "This device is not linked to your Magenda account yet.\n\nOpen the Magenda platform in your browser, then click “Open MagendaSupport” on the platform to send the registration link to this application.",
+  //     {
+  //       title: "Device registration required",
+  //       kind: "info",
+  //       okLabel: "Open Platform",
+  //       cancelLabel: "Not Now",
+  //     },
+  //   );
 
-    if (!openPlatform) {
-      return;
+  //   if (!openPlatform) {
+  //     return;
+  //   }
+
+  //   await openUrl(`${getFrontendUrl(installConfig?.mode)}?install=rustdesk`);
+  // }
+
+  async function handleOpenPlatform() {
+    try {
+      const url = `${getFrontendUrl(installConfig?.mode)}?install=rustdesk`;
+
+      // Сначала открываем сайт в браузере.
+      await openUrl(url);
+
+      // Затем закрываем MagendaSupport.
+      await getCurrentWindow().close();
+    } catch (err) {
+      console.error("Failed to open Magenda platform:", err);
+
+      const msg = getErrorMessage(err, "Failed to open the Magenda platform.");
+
+      await message(msg, {
+        title: "Magenda Support",
+        kind: "error",
+      });
     }
-
-    await openUrl(`${getFrontendUrl(installConfig?.mode)}?install=rustdesk`);
   }
 
   // ============================================================
@@ -670,106 +702,93 @@ rustdesk://${currentRustdeskId.trim()}`;
           <div className="text-2xl font-medium text-white">Magenda Support</div>
         </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-          }}
-          noValidate
-          className="flex w-full max-w-120 flex-col gap-2 px-8"
-        >
-          {registration ? (
-            <>
-              <div>
-                <label
-                  htmlFor="message"
-                  className="mb-1 text-sm font-bold text-white"
-                >
-                  Message:
-                </label>
-
-                <textarea
-                  value={supportMessage}
-                  onChange={(e) => {
-                    setSupportMessage(e.target.value);
-                  }}
-                  disabled={processing}
-                  id="message"
-                  placeholder="Describe your issue..."
-                  rows={3}
-                  className="w-full resize-none rounded-lg border-gray-300 px-3 py-2 shadow-sm"
-                />
+        {missingInstallToken ? (
+          <div className="flex w-full max-w-120 flex-col items-center gap-4 px-8">
+            <div className="rounded-xl bg-white/10 p-4 text-center text-white shadow-lg backdrop-blur-sm">
+              <div className="mb-2 text-lg leading-none font-semibold">
+                Connect this computer
               </div>
 
-              <button
-                type="button"
-                onClick={handleRequest}
-                disabled={
-                  processing ||
-                  !supportMessage.trim() ||
-                  !currentRustdeskId ||
-                  !installConfig
-                }
-                className="
-                  ms-auto
-                  inline-flex
-                  items-center
-                  justify-center
-                  rounded-md
-                  border-0
-                  bg-[#67ae6f]
-                  px-4
-                  py-2
-                  text-sm
-                  font-medium
-                  text-white
-                  shadow-sm
-                  transition
-                  hover:opacity-90
-                  focus:outline-none
-                  focus:ring-0
-                  disabled:cursor-not-allowed
-                  disabled:opacity-50
-                "
-              >
-                {processing ? "Sending..." : "Request Support"}
-              </button>
-            </>
-          ) : (
-            <>
-              <div>
-                <label
-                  htmlFor="computerName"
-                  className="mb-1 text-sm font-bold text-white"
-                >
-                  Computer name:
-                </label>
-
-                <input
-                  type="text"
-                  value={computerName}
-                  onChange={(e) => {
-                    const value = e.target.value;
-
-                    setComputerName(value);
-
-                    localStorage.setItem("computer_name", value);
-                  }}
-                  disabled={processing}
-                  id="computerName"
-                  placeholder="Enter computer name..."
-                  className="w-full rounded-lg border-gray-300 px-3 py-2 shadow-sm"
-                />
+              <div className="text-sm leading-none text-white/90">
+                This computer is not connected to your Magenda account yet.
+                <br />
+                <br />
+                Open the Magenda platform and continue the connection process
+                there.
               </div>
+            </div>
 
-              <div className="flex gap-4 pt-2">
+            <button
+              type="button"
+              onClick={handleOpenPlatform}
+              className="
+                inline-flex
+                items-center
+                justify-center
+                rounded-md
+                border-0
+                bg-[#67ae6f]
+                px-5
+                py-2.5
+                text-sm
+                font-medium
+                text-white
+                shadow-sm
+                transition
+                hover:opacity-90
+                focus:outline-none
+                focus:ring-0
+              "
+            >
+              Open Magenda Platform
+            </button>
+
+            <div className="text-center text-xs leading-none text-white/70">
+              Magenda Support will close after opening the platform.
+              <br />
+              It will open again when you connect this computer from the
+              website.
+            </div>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+            }}
+            noValidate
+            className="flex w-full max-w-120 flex-col gap-2 px-8"
+          >
+            {registration ? (
+              <>
+                <div>
+                  <label
+                    htmlFor="message"
+                    className="mb-1 text-sm font-bold text-white"
+                  >
+                    Message:
+                  </label>
+
+                  <textarea
+                    value={supportMessage}
+                    onChange={(e) => {
+                      setSupportMessage(e.target.value);
+                    }}
+                    disabled={processing}
+                    id="message"
+                    placeholder="Describe your issue..."
+                    rows={3}
+                    className="w-full resize-none rounded-lg border-gray-300 px-3 py-2 shadow-sm"
+                  />
+                </div>
+
                 <button
                   type="button"
-                  onClick={handleRegister}
+                  onClick={handleRequest}
                   disabled={
-                    !installConfig ||
                     processing ||
-                    !computerName.trim() ||
-                    !currentRustdeskId
+                    !supportMessage.trim() ||
+                    !currentRustdeskId ||
+                    !installConfig
                   }
                   className="
                     ms-auto
@@ -793,12 +812,75 @@ rustdesk://${currentRustdeskId.trim()}`;
                     disabled:opacity-50
                   "
                 >
-                  Register Device
+                  {processing ? "Sending..." : "Request Support"}
                 </button>
-              </div>
-            </>
-          )}
-        </form>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label
+                    htmlFor="computerName"
+                    className="mb-1 text-sm font-bold text-white"
+                  >
+                    Computer name:
+                  </label>
+
+                  <input
+                    type="text"
+                    value={computerName}
+                    onChange={(e) => {
+                      const value = e.target.value;
+
+                      setComputerName(value);
+
+                      localStorage.setItem("computer_name", value);
+                    }}
+                    disabled={processing}
+                    id="computerName"
+                    placeholder="Enter computer name..."
+                    className="w-full rounded-lg border-gray-300 px-3 py-2 shadow-sm"
+                  />
+                </div>
+
+                <div className="flex gap-4 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleRegister}
+                    disabled={
+                      !installConfig ||
+                      processing ||
+                      !computerName.trim() ||
+                      !currentRustdeskId
+                    }
+                    className="
+                      ms-auto
+                      inline-flex
+                      items-center
+                      justify-center
+                      rounded-md
+                      border-0
+                      bg-[#67ae6f]
+                      px-4
+                      py-2
+                      text-sm
+                      font-medium
+                      text-white
+                      shadow-sm
+                      transition
+                      hover:opacity-90
+                      focus:outline-none
+                      focus:ring-0
+                      disabled:cursor-not-allowed
+                      disabled:opacity-50
+                    "
+                  >
+                    Register Device
+                  </button>
+                </div>
+              </>
+            )}
+          </form>
+        )}
 
         {/* <button
           type="button"
