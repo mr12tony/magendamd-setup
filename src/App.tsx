@@ -109,6 +109,37 @@ function App() {
 
   const [status, setStatus] = useState<RustDeskStatus | null>(null);
 
+  function canRegisterRustDesk(value: RustDeskStatus) {
+    return value.installed && !!value.id?.trim();
+  }
+
+  async function ensureComputerName() {
+    const current = computerName.trim();
+
+    if (current) {
+      return current;
+    }
+
+    const saved = localStorage.getItem("computer_name")?.trim();
+
+    if (saved) {
+      setComputerName(saved);
+      return saved;
+    }
+
+    const info = await getSystemInfo();
+    const value = info.hostname?.trim() ?? "";
+
+    if (!value) {
+      throw new Error("Computer name is missing.");
+    }
+
+    localStorage.setItem("computer_name", value);
+    setComputerName(value);
+
+    return value;
+  }
+
   async function checkForUpdates() {
     try {
       const update = await invoke<UpdateInfo>("check_for_updates");
@@ -152,11 +183,39 @@ function App() {
   function isRustDeskHealthy(value: RustDeskStatus) {
     return (
       value.installed &&
-      value.version === "1.4.9" &&
+      value.version?.startsWith("1.4.9") === true &&
       value.service_running &&
       value.configured &&
       !!value.id?.trim()
     );
+  }
+
+  function getRustDeskHealthProblems(value: RustDeskStatus) {
+    const problems: string[] = [];
+
+    if (!value.installed) {
+      problems.push("RustDesk is not installed");
+    }
+
+    if (!value.version?.startsWith("1.4.9")) {
+      problems.push(
+        `Unexpected RustDesk version: ${value.version ?? "unknown"}`,
+      );
+    }
+
+    if (!value.service_running) {
+      problems.push("RustDesk service is not running");
+    }
+
+    if (!value.configured) {
+      problems.push("RustDesk configuration is invalid");
+    }
+
+    if (!value.id?.trim()) {
+      problems.push("RustDesk ID is missing");
+    }
+
+    return problems;
   }
 
   function getErrorMessage(err: unknown, fallback: string) {
@@ -193,10 +252,6 @@ function App() {
 
   async function initialize(skipMissingTokenScreen = false) {
     try {
-      // ========================================
-      // TOKEN
-      // ========================================
-
       const config = await invoke<InstallConfig | null>("get_install_config");
 
       if (config?.install_token?.trim()) {
@@ -212,32 +267,9 @@ function App() {
           setMissingInstallToken(false);
         } else {
           setMissingInstallToken(true);
-          return;
         }
       }
-
-      // ========================================
-      // RUSTDESK
-      // ========================================
-
-      let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
-
-      if (!isRustDeskHealthy(rustdeskStatus)) {
-        await invoke("configure_rustdesk");
-
-        rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
-      }
-
-      if (!isRustDeskHealthy(rustdeskStatus)) {
-        throw new Error("RustDesk configuration is incomplete.");
-      }
-
-      setStatus(rustdeskStatus);
-      setCurrentRustdeskId(rustdeskStatus.id!.trim());
     } catch (err) {
-      setCurrentRustdeskId("");
-      setStatus(null);
-
       const msg = getErrorMessage(err, "Failed to initialize the application.");
 
       await message(msg, {
@@ -258,22 +290,36 @@ function App() {
       throw new Error("Installation token is missing.");
     }
 
-    const cleanComputerName = computerName.trim();
-
-    if (!cleanComputerName) {
-      throw new Error("Computer name is missing.");
-    }
+    const cleanComputerName = await ensureComputerName();
 
     let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
 
+    // Пытаемся привести RustDesk к правильной конфигурации.
     if (!isRustDeskHealthy(rustdeskStatus)) {
       await invoke("configure_rustdesk");
 
       rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
     }
 
+    // Полный health check может не пройти,
+    // но если RustDesk установлен и ID уже есть —
+    // устройство всё равно можно зарегистрировать.
+    if (!canRegisterRustDesk(rustdeskStatus)) {
+      const problems = getRustDeskHealthProblems(rustdeskStatus);
+
+      console.error("RustDesk cannot be registered:", rustdeskStatus);
+
+      throw new Error(
+        `RustDesk is not ready for registration.\n\n${problems.join("\n")}`,
+      );
+    }
+
+    // Если health неполный — только логируем, но регистрацию не блокируем.
     if (!isRustDeskHealthy(rustdeskStatus)) {
-      throw new Error("RustDesk configuration is incomplete.");
+      console.warn(
+        "RustDesk health check is incomplete, continuing registration:",
+        rustdeskStatus,
+      );
     }
 
     const rustdeskId = rustdeskStatus.id!.trim();
@@ -373,21 +419,22 @@ function App() {
       try {
         setProcessing(true);
 
-        console.log("Received install config from deep link.");
-
         const config: InstallConfig = {
           install_token: deepLinkConfig.token,
           mode: deepLinkConfig.mode,
         };
 
+        // 1. Сохраняем config.
         await invoke("save_install_config", {
           token: config.install_token,
           mode: config.mode,
         });
 
+        // 2. Обновляем frontend state.
         setInstallConfig(config);
         setMissingInstallToken(false);
 
+        // 3. Проверяем/настраиваем RustDesk и регистрируем.
         await registerDevice(config);
 
         await message(
@@ -610,44 +657,80 @@ rustdesk://${currentRustdeskId.trim()}`;
 
     (async () => {
       try {
-        // --------------------------------------------------------
-        // СНАЧАЛА проверяем, было ли приложение запущено
-        // через deep link.
-        // --------------------------------------------------------
-
         const urls = await getCurrent();
 
-        const hasInstallDeepLink =
-          urls?.some((url) => getInstallConfigFromUrl(url) !== null) ?? false;
+        const installUrl =
+          urls?.find((url) => getInstallConfigFromUrl(url) !== null) ?? null;
 
-        // --------------------------------------------------------
-        // Инициализируем RustDesk.
-        //
-        // Если приложение запущено через deep link,
-        // НЕ показываем Missing Token dialog.
-        // --------------------------------------------------------
+        if (installUrl) {
+          const deepLinkConfig = getInstallConfigFromUrl(installUrl);
 
-        await initialize(hasInstallDeepLink);
+          if (deepLinkConfig) {
+            const config: InstallConfig = {
+              install_token: deepLinkConfig.token,
+              mode: deepLinkConfig.mode,
+            };
 
-        await checkPermissions();
+            // 1. Сохраняем install.json сразу.
+            await invoke("save_install_config", {
+              token: config.install_token,
+              mode: config.mode,
+            });
 
-        // --------------------------------------------------------
-        // Теперь обрабатываем cold-start deep link.
-        // --------------------------------------------------------
+            // 2. Обновляем frontend state.
+            setInstallConfig(config);
+            setMissingInstallToken(false);
 
-        if (urls?.length) {
-          await handleDeepLinks(urls);
+            // 3. Проверяем permissions.
+            await checkPermissions();
+
+            // 4. Регистрируем устройство.
+            // Полный RustDesk health может быть неидеальным,
+            // но если RustDesk установлен и есть ID,
+            // registerDevice продолжит регистрацию.
+            await registerDevice(config);
+
+            await message(
+              "This device has been successfully connected to support.",
+              {
+                title: "Device registered",
+                kind: "info",
+              },
+            );
+          }
+        } else {
+          // Обычный запуск приложения без deep link.
+          await initialize(false);
+
+          const rustdeskStatus = await invoke<RustDeskStatus>(
+            "get_rustdesk_status",
+          );
+
+          setStatus(rustdeskStatus);
+
+          if (rustdeskStatus.id?.trim()) {
+            setCurrentRustdeskId(rustdeskStatus.id.trim());
+          }
+
+          await checkPermissions();
         }
 
-        // --------------------------------------------------------
-        // Приложение уже работает, пользователь нажал deep link.
-        // --------------------------------------------------------
-
+        // Deep link пришёл, когда приложение уже запущено.
         unlisten = await onOpenUrl(async (urls) => {
           await handleDeepLinks(urls);
         });
       } catch (err) {
         console.error("Application startup failed:", err);
+
+        const msg = getErrorMessage(
+          err,
+          "Failed to initialize or register the device.",
+        );
+
+        await message(msg, {
+          title: "Magenda Support",
+          kind: "error",
+        });
       }
     })();
 
