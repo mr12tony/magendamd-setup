@@ -841,7 +841,7 @@ rustdesk://${currentRustdeskId.trim()}`;
             noValidate
             className="flex w-full max-w-120 flex-col gap-2 px-8"
           >
-            {registration ? (
+            {false && registration ? (
               <>
                 <div>
                   <label

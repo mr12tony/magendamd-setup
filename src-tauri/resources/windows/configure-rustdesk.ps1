@@ -57,6 +57,59 @@ $Arm64Installer = Join-Path `
     $PSScriptRoot `
     "rustdesk-1.4.9-aarch64.exe"
 
+function Remove-RustDeskShortcuts {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        $InteractiveUser
+    )
+
+    Log "Removing RustDesk shortcuts..."
+
+    $shortcuts = New-Object System.Collections.Generic.List[string]
+
+    # Public Desktop
+    $shortcuts.Add(
+        (Join-Path $env:PUBLIC "Desktop\RustDesk.lnk")
+    )
+
+    # Interactive user's Desktop
+    if (
+        $InteractiveUser -and
+        -not [string]::IsNullOrWhiteSpace(
+            $InteractiveUser.ProfilePath
+        )
+    ) {
+        $shortcuts.Add(
+            (Join-Path `
+                $InteractiveUser.ProfilePath `
+                "Desktop\RustDesk.lnk")
+        )
+    }
+
+    foreach ($shortcut in $shortcuts) {
+
+        if (Test-Path -LiteralPath $shortcut) {
+
+            try {
+
+                Remove-Item `
+                    -LiteralPath $shortcut `
+                    -Force `
+                    -ErrorAction Stop
+
+                Log "Removed shortcut: $shortcut"
+            }
+            catch {
+
+                Log "Could not remove shortcut: $shortcut"
+            }
+        }
+    }
+
+    Log "RustDesk shortcut cleanup completed."
+}
+
 
 # ============================================================
 # LOGGING
@@ -1335,6 +1388,13 @@ try {
 
         Fail "rustdesk.exe could not be found."
     }
+
+    # ========================================================
+    # 3.1 Remove RustDesk desktop shortcuts
+    # ========================================================
+
+    Remove-RustDeskShortcuts `
+        -InteractiveUser $interactiveUser
 
 
     # ========================================================
