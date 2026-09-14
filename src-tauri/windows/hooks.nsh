@@ -92,26 +92,65 @@
 
         DetailPrint "Companion install config found."
 
-        CreateDirectory "$COMMONAPPDATA\Magendamd"
+        ; ----------------------------------------------------
+        ; Resolve real ProgramData path.
+        ;
+        ; Example:
+        ; C:\ProgramData
+        ; ----------------------------------------------------
 
-        ClearErrors
+        ReadEnvStr $5 "ProgramData"
 
-        CopyFiles /SILENT \
-            "$2" \
-            "$COMMONAPPDATA\Magendamd\install.json"
+        ${If} $5 == ""
 
-        ${If} ${Errors}
-
-            DetailPrint "WARNING: Failed to copy install config."
-
-            ; Не Abort.
-            ; Установка продолжается, чтобы остался fallback
-            ; через deep link.
+            DetailPrint "WARNING: ProgramData environment variable not found."
+            DetailPrint "Skipping companion install config."
 
         ${Else}
 
-            DetailPrint "Install config copied successfully."
-            DetailPrint "$COMMONAPPDATA\Magendamd\install.json"
+            StrCpy $6 "$5\Magendamd"
+            StrCpy $7 "$6\install.json"
+
+            DetailPrint "ProgramData: $5"
+            DetailPrint "Create folder: $6"
+            DetailPrint "Copy to: $7"
+
+            ; Create:
+            ; C:\ProgramData\Magendamd
+            ;
+            ; If it already exists, nothing bad happens.
+            CreateDirectory "$6"
+
+            ClearErrors
+
+            ; Copy:
+            ;
+            ; install.json
+            ; install (1).json
+            ; install (2).json
+            ;
+            ; ->
+            ;
+            ; C:\ProgramData\Magendamd\install.json
+            ;
+            ; Existing install.json will be overwritten.
+            CopyFiles /SILENT \
+                "$2" \
+                "$7"
+
+            ${If} ${Errors}
+
+                DetailPrint "WARNING: Failed to copy install config."
+
+                ; Do NOT abort installation.
+                ; Deep-link logic remains available as fallback.
+
+            ${Else}
+
+                DetailPrint "Install config copied successfully."
+                DetailPrint "Destination: $7"
+
+            ${EndIf}
 
         ${EndIf}
 
