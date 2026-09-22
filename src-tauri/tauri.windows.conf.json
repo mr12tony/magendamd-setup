@@ -13,7 +13,8 @@
             "nsis": {
                 "installMode": "perMachine",
                 "installerHooks": "./windows/hooks.nsh",
-                "installerIcon": "icons/icon.ico"
+                "installerIcon": "icons/icon.ico",
+                "template": "./windows/installer.nsi"
             }
         }
     }
