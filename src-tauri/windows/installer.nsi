@@ -406,43 +406,13 @@ Var AppStartMenuFolder
 ; Don't auto jump to finish page after installation page,
 ; because the installation page has useful info that can be used debug any issues with the installer.
 !define MUI_FINISHPAGE_NOAUTOCLOSE
-
-; --------------------------------------------------------
-; MagendaSupport custom Finish page
-;
-; Desktop shortcut:
-;   - do not create
-;   - do not show checkbox
-;
-; Run MagendaSupport:
-;   - always run after user presses Finish
-;   - do not show checkbox
-; --------------------------------------------------------
-
+; No run or desktop shortcut checkboxes.
+; Successful interactive installs launch the app from .onInstSuccess.
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-!define MUI_PAGE_CUSTOMFUNCTION_LEAVE FinishPageLeave
 !insertmacro MUI_PAGE_FINISH
 
-
-; --------------------------------------------------------
-; Run application as the logged-in user.
-;
-; Important for perMachine installer because NSIS itself
-; is running elevated.
-; --------------------------------------------------------
-
 Function RunMainBinary
-  nsis_tauri_utils::RunAsUser "$INSTDIR${MAINBINARYNAME}.exe" ""
-FunctionEnd
-
-
-; --------------------------------------------------------
-; User pressed Finish.
-; Always start MagendaSupport.
-; --------------------------------------------------------
-
-Function FinishPageLeave
-  Call RunMainBinary
+  nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
 FunctionEnd
 
 ; Uninstaller Pages
@@ -748,12 +718,8 @@ Section Install
     Call CreateOrUpdateStartMenuShortcut
   !insertmacro MUI_STARTMENU_WRITE_END
 
-  ; Create desktop shortcut for silent and passive installers
-  ; because finish page will be skipped
-  ${If} $PassiveMode = 1
-  ${OrIf} ${Silent}
-    Call CreateOrUpdateDesktopShortcut
-  ${EndIf}
+  ; Update existing desktop shortcuts without creating new ones.
+  Call CreateOrUpdateDesktopShortcut
 
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL
@@ -766,8 +732,7 @@ Section Install
 SectionEnd
 
 Function .onInstSuccess
-  ; Check for `/R` flag only in silent and passive installers because
-  ; GUI installer has a toggle for the user to (re)start the app
+  ; Preserve Tauri's explicit /R restart in silent and passive installers.
   ${If} $PassiveMode = 1
   ${OrIf} ${Silent}
     ${GetOptions} $CMDLINE "/R" $R0
@@ -775,6 +740,10 @@ Function .onInstSuccess
       ${GetOptions} $CMDLINE "/ARGS" $R0
       nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
     ${EndIf}
+  ${ElseIf} $UpdateMode <> 1
+    ; NSIS calls this after successful installation, as the installer closes.
+    ; In the interactive wizard, this is after the user presses Finish.
+    Call RunMainBinary
   ${EndIf}
 FunctionEnd
 
@@ -979,24 +948,12 @@ Function CreateOrUpdateStartMenuShortcut
 FunctionEnd
 
 Function CreateOrUpdateDesktopShortcut
+  ; Never create a new desktop shortcut.
   ; We used to use product name as MAINBINARYNAME
   ; migrate old shortcuts to target the new MAINBINARYNAME
   !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
   Pop $0
   ${If} $0 = 1
     !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    Return
   ${EndIf}
-
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
-  ${If} $WixMode = 0
-    ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
-      Return
-    ${EndIf}
-  ${EndIf}
-
-  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-  !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
 FunctionEnd
