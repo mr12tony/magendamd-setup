@@ -69,6 +69,30 @@ function getFrontendUrl(mode: InstallMode = "prod") {
   }
 }
 
+async function lockWindow() {
+  const window = getCurrentWindow();
+
+  await window.setClosable(false);
+  await window.setMinimizable(false);
+  await window.setMaximizable(false);
+  await window.setResizable(false);
+}
+
+async function unlockWindow() {
+  const window = getCurrentWindow();
+
+  await window.setClosable(true);
+  await window.setMinimizable(true);
+  await window.setMaximizable(true);
+  await window.setResizable(true);
+}
+
+async function closeWindow() {
+  const window = getCurrentWindow();
+
+  await window.close();
+}
+
 function App() {
   const [registration, setRegistration] = useState<RegistrationData | null>(
     () => {
@@ -92,7 +116,7 @@ function App() {
     return saved ?? "";
   });
 
-  const [supportMessage, setSupportMessage] = useState("");
+  // const [supportMessage, setSupportMessage] = useState("");
 
   const [processing, setProcessing] = useState(false);
 
@@ -257,6 +281,8 @@ function App() {
       if (config?.install_token?.trim()) {
         setInstallConfig(config);
         setMissingInstallToken(false);
+
+        await unlockWindow();
       } else {
         setInstallConfig(null);
 
@@ -268,6 +294,8 @@ function App() {
         } else {
           setMissingInstallToken(true);
         }
+
+        await lockWindow();
       }
     } catch (err) {
       const msg = getErrorMessage(err, "Failed to initialize the application.");
@@ -392,6 +420,8 @@ function App() {
         title: "Device registered",
         kind: "info",
       });
+
+      await closeWindow();
     } catch (err) {
       const msg = getErrorMessage(err, "Failed to register the device.");
 
@@ -434,6 +464,8 @@ function App() {
         setInstallConfig(config);
         setMissingInstallToken(false);
 
+        await unlockWindow();
+
         // 3. Проверяем/настраиваем RustDesk и регистрируем.
         await registerDevice(config);
 
@@ -444,6 +476,8 @@ function App() {
             kind: "info",
           },
         );
+
+        await closeWindow();
       } catch (err) {
         const msg = getErrorMessage(err, "Failed to register the device.");
 
@@ -482,102 +516,102 @@ function App() {
   // SUPPORT REQUEST
   // ============================================================
 
-  async function handleRequest() {
-    const cleanMessage = supportMessage.trim();
+  //   async function handleRequest() {
+  //     const cleanMessage = supportMessage.trim();
 
-    if (!cleanMessage) {
-      await message("Please describe your issue.", {
-        title: "Support request",
-        kind: "warning",
-      });
+  //     if (!cleanMessage) {
+  //       await message("Please describe your issue.", {
+  //         title: "Support request",
+  //         kind: "warning",
+  //       });
 
-      return;
-    }
+  //       return;
+  //     }
 
-    if (!installConfig) {
-      await message("Installation configuration is missing.", {
-        title: "Support request error",
-        kind: "error",
-      });
+  //     if (!installConfig) {
+  //       await message("Installation configuration is missing.", {
+  //         title: "Support request error",
+  //         kind: "error",
+  //       });
 
-      return;
-    }
+  //       return;
+  //     }
 
-    const cleanToken = installConfig.install_token?.trim();
+  //     const cleanToken = installConfig.install_token?.trim();
 
-    if (!cleanToken) {
-      await message("Installation token is missing.", {
-        title: "Support request error",
-        kind: "error",
-      });
+  //     if (!cleanToken) {
+  //       await message("Installation token is missing.", {
+  //         title: "Support request error",
+  //         kind: "error",
+  //       });
 
-      return;
-    }
+  //       return;
+  //     }
 
-    try {
-      setProcessing(true);
+  //     try {
+  //       setProcessing(true);
 
-      const backendUrl = getBackendUrl(installConfig.mode);
+  //       const backendUrl = getBackendUrl(installConfig.mode);
 
-      // Добавляем RustDesk deep link к сообщению.
-      const formattedMessage = `${cleanMessage}
+  //       // Добавляем RustDesk deep link к сообщению.
+  //       const formattedMessage = `${cleanMessage}
 
-rustdesk://${currentRustdeskId.trim()}`;
+  // rustdesk://${currentRustdeskId.trim()}`;
 
-      const response = await fetch(`${backendUrl}/rustdesk/message`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-RustDesk-Key": cleanToken,
-        },
-        body: JSON.stringify({
-          message: formattedMessage,
-          device_id: currentRustdeskId,
-          name: computerName.trim(),
-        }),
-      });
+  //       const response = await fetch(`${backendUrl}/rustdesk/message`, {
+  //         method: "POST",
+  //         headers: {
+  //           "Content-Type": "application/json",
+  //           "X-RustDesk-Key": cleanToken,
+  //         },
+  //         body: JSON.stringify({
+  //           message: formattedMessage,
+  //           device_id: currentRustdeskId,
+  //           name: computerName.trim(),
+  //         }),
+  //       });
 
-      if (!response.ok) {
-        let serverMessage = "";
+  //       if (!response.ok) {
+  //         let serverMessage = "";
 
-        try {
-          const data = await response.json();
+  //         try {
+  //           const data = await response.json();
 
-          serverMessage = data?.message || data?.error || "";
-        } catch {
-          try {
-            serverMessage = await response.text();
-          } catch {
-            //
-          }
-        }
+  //           serverMessage = data?.message || data?.error || "";
+  //         } catch {
+  //           try {
+  //             serverMessage = await response.text();
+  //           } catch {
+  //             //
+  //           }
+  //         }
 
-        throw new Error(
-          serverMessage ||
-            `Failed to send support request. Server returned HTTP ${response.status}.`,
-        );
-      }
+  //         throw new Error(
+  //           serverMessage ||
+  //             `Failed to send support request. Server returned HTTP ${response.status}.`,
+  //         );
+  //       }
 
-      // Очищаем сообщение только после успешной отправки.
-      setSupportMessage("");
+  //       // Очищаем сообщение только после успешной отправки.
+  //       setSupportMessage("");
 
-      await message("Your support request has been sent successfully.", {
-        title: "Support request sent",
-        kind: "info",
-      });
-    } catch (err) {
-      console.error("Failed to send support request:", err);
+  //       await message("Your support request has been sent successfully.", {
+  //         title: "Support request sent",
+  //         kind: "info",
+  //       });
+  //     } catch (err) {
+  //       console.error("Failed to send support request:", err);
 
-      const msg = getErrorMessage(err, "Failed to send support request.");
+  //       const msg = getErrorMessage(err, "Failed to send support request.");
 
-      await message(msg, {
-        title: "Support request error",
-        kind: "error",
-      });
-    } finally {
-      setProcessing(false);
-    }
-  }
+  //       await message(msg, {
+  //         title: "Support request error",
+  //         kind: "error",
+  //       });
+  //     } finally {
+  //       setProcessing(false);
+  //     }
+  //   }
 
   // ============================================================
   // MISSING TOKEN
@@ -609,7 +643,7 @@ rustdesk://${currentRustdeskId.trim()}`;
       await openUrl(url);
 
       // Затем закрываем MagendaSupport.
-      await getCurrentWindow().close();
+      await closeWindow();
     } catch (err) {
       console.error("Failed to open Magenda platform:", err);
 
@@ -681,6 +715,8 @@ rustdesk://${currentRustdeskId.trim()}`;
             setInstallConfig(config);
             setMissingInstallToken(false);
 
+            await unlockWindow();
+
             // 3. Проверяем permissions.
             await checkPermissions();
 
@@ -697,6 +733,8 @@ rustdesk://${currentRustdeskId.trim()}`;
                 kind: "info",
               },
             );
+
+            await closeWindow();
           }
         } else {
           // Обычный запуск приложения без deep link.
@@ -768,7 +806,7 @@ rustdesk://${currentRustdeskId.trim()}`;
             />
 
             <span className="text-sm font-medium text-white">
-              Registering your device...
+              {registration ? "Renaming" : "Registering"} your device...
             </span>
           </div>
         </div>
@@ -841,7 +879,15 @@ rustdesk://${currentRustdeskId.trim()}`;
             noValidate
             className="flex w-full max-w-120 flex-col gap-2 px-8"
           >
-            {false && registration ? (
+            {registration && (
+              <div className="rounded-xl bg-white/10 p-4 text-center text-white shadow-lg backdrop-blur-sm">
+                <div className="text-sm leading-none text-white/90">
+                  This device has been successfully connected to support.
+                </div>
+              </div>
+            )}
+
+            {/* {registration ? (
               <>
                 <div>
                   <label
@@ -899,43 +945,43 @@ rustdesk://${currentRustdeskId.trim()}`;
                 </button>
               </>
             ) : (
-              <>
-                <div>
-                  <label
-                    htmlFor="computerName"
-                    className="mb-1 text-sm font-bold text-white"
-                  >
-                    Computer name:
-                  </label>
+              <> */}
+            <div>
+              <label
+                htmlFor="computerName"
+                className="mb-1 text-sm font-bold text-white"
+              >
+                Computer name:
+              </label>
 
-                  <input
-                    type="text"
-                    value={computerName}
-                    onChange={(e) => {
-                      const value = e.target.value;
+              <input
+                type="text"
+                value={computerName}
+                onChange={(e) => {
+                  const value = e.target.value;
 
-                      setComputerName(value);
+                  setComputerName(value);
 
-                      localStorage.setItem("computer_name", value);
-                    }}
-                    disabled={processing}
-                    id="computerName"
-                    placeholder="Enter computer name..."
-                    className="w-full rounded-lg border-gray-300 px-3 py-2 shadow-sm"
-                  />
-                </div>
+                  localStorage.setItem("computer_name", value);
+                }}
+                disabled={processing}
+                id="computerName"
+                placeholder="Enter computer name..."
+                className="w-full rounded-lg border-gray-300 px-3 py-2 shadow-sm"
+              />
+            </div>
 
-                <div className="flex gap-4 pt-2">
-                  <button
-                    type="button"
-                    onClick={handleRegister}
-                    disabled={
-                      !installConfig ||
-                      processing ||
-                      !computerName.trim() ||
-                      !currentRustdeskId
-                    }
-                    className="
+            <div className="flex gap-4 pt-2">
+              <button
+                type="button"
+                onClick={handleRegister}
+                disabled={
+                  !installConfig ||
+                  processing ||
+                  !computerName.trim() ||
+                  !currentRustdeskId
+                }
+                className="
                       ms-auto
                       inline-flex
                       items-center
@@ -956,12 +1002,12 @@ rustdesk://${currentRustdeskId.trim()}`;
                       disabled:cursor-not-allowed
                       disabled:opacity-50
                     "
-                  >
-                    Register Device
-                  </button>
-                </div>
-              </>
-            )}
+              >
+                {registration ? "Rename" : "Register"} Device
+              </button>
+            </div>
+            {/* </>
+            )} */}
           </form>
         )}
 

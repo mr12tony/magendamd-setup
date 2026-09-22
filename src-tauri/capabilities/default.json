@@ -17,6 +17,10 @@
     "deep-link:default",
     "updater:default",
     "process:allow-restart",
+    "core:window:allow-set-closable",
+    "core:window:allow-set-minimizable",
+    "core:window:allow-set-maximizable",
+    "core:window:allow-set-resizable",
     {
       "identifier": "fs:allow-exists",
       "allow": [
