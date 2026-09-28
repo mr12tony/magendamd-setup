@@ -1,15 +1,16 @@
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 
-
 ; ============================================================
 ; PREINSTALL
 ;
-; Looks for a companion install config next to the installer:
+; Selects the most recently modified install config next to the installer:
 ;
-;   MagendaSupport.exe      -> install.json
-;   MagendaSupport (1).exe  -> install (1).json
-;   MagendaSupport (2).exe  -> install (2).json
+;   install.json
+;   install (N).json
+;   install-N.json
+;
+; The installer's filename and duplicate-download suffix are irrelevant.
 ;
 ; If found:
 ;   copy to C:\ProgramData\Magendamd\install.json
@@ -18,6 +19,138 @@
 ;   do nothing and continue installation.
 ;   Deep-link logic will be used later.
 ; ============================================================
+Function MagendaIsInstallConfigFilename
+    ; Stack input: filename. Stack output: 1 if supported, otherwise 0.
+    Exch $0
+    Push $1
+    Push $2
+
+    StrCmpS $0 "install.json" filename_valid
+
+    StrCpy $1 $0 9
+    StrCmpS $1 "install (" filename_parentheses
+    StrCpy $1 $0 8
+    StrCmpS $1 "install-" filename_dash filename_invalid
+
+    filename_parentheses:
+        StrCpy $1 $0 6 -6
+        StrCmpS $1 ").json" 0 filename_invalid
+        StrCpy $1 $0 "" 9
+        StrLen $2 $1
+        IntOp $2 $2 - 6
+        StrCpy $1 $1 $2
+        Goto filename_digits
+
+    filename_dash:
+        StrCpy $1 $0 5 -5
+        StrCmpS $1 ".json" 0 filename_invalid
+        StrCpy $1 $0 "" 8
+        StrLen $2 $1
+        IntOp $2 $2 - 5
+        StrCpy $1 $1 $2
+
+    filename_digits:
+        StrCmp $1 "" filename_invalid
+    filename_digit_loop:
+        StrCpy $2 $1 1
+        StrCmp $2 "" filename_valid
+        StrCmpS $2 "0" filename_next_digit
+        StrCmpS $2 "1" filename_next_digit
+        StrCmpS $2 "2" filename_next_digit
+        StrCmpS $2 "3" filename_next_digit
+        StrCmpS $2 "4" filename_next_digit
+        StrCmpS $2 "5" filename_next_digit
+        StrCmpS $2 "6" filename_next_digit
+        StrCmpS $2 "7" filename_next_digit
+        StrCmpS $2 "8" filename_next_digit
+        StrCmpS $2 "9" filename_next_digit filename_invalid
+    filename_next_digit:
+        StrCpy $1 $1 "" 1
+        Goto filename_digit_loop
+
+    filename_valid:
+        StrCpy $0 1
+        Goto filename_done
+    filename_invalid:
+        StrCpy $0 0
+    filename_done:
+        Pop $2
+        Pop $1
+        Exch $0
+FunctionEnd
+
+Function MagendaFindNewestInstallConfig
+    ; Stack input: directory. Stack output: full path, or an empty string.
+    ; Preserve the installer's registers, including across the filename helper.
+    Exch $0
+    Push $1
+    Push $2
+    Push $3
+    Push $4
+    Push $5
+    Push $6
+    Push $7
+    Push $8
+
+    StrCpy $3 ""
+    StrCpy $6 0
+    StrCpy $7 0
+
+    ClearErrors
+    FindFirst $1 $2 "$0\install*.json"
+    IfErrors config_scan_done
+
+    config_scan_loop:
+        StrCmp $2 "" config_scan_close
+        ; Ignore directories even when their names match the JSON pattern.
+        IfFileExists "$0\$2\*.*" config_scan_next 0
+
+        Push $2
+        Call MagendaIsInstallConfigFilename
+        Pop $8
+        StrCmp $8 1 0 config_scan_next
+
+        ClearErrors
+        GetFileTime "$0\$2" $4 $5
+        IfErrors config_time_error
+        StrCmp $3 "" config_use_candidate
+
+        ; FILETIME is two unsigned DWORDs: compare high first, then low.
+        IntCmpU $4 $6 config_compare_low config_scan_next config_use_candidate
+    config_compare_low:
+        ; Keep the first match if timestamps are identical.
+        IntCmpU $5 $7 config_scan_next config_scan_next config_use_candidate
+
+    config_use_candidate:
+        StrCpy $3 "$0\$2"
+        StrCpy $6 $4
+        StrCpy $7 $5
+
+    config_scan_next:
+        FindNext $1 $2
+        IfErrors config_scan_close
+        Goto config_scan_loop
+
+    config_time_error:
+        DetailPrint "WARNING: Cannot read modification time for $0\$2. Skipping config import."
+        ; Do not silently import an older config when a candidate cannot be dated.
+        StrCpy $3 ""
+    config_scan_close:
+        FindClose $1
+    config_scan_done:
+        ClearErrors
+        StrCpy $0 $3
+        Pop $8
+        Pop $7
+        Pop $6
+        Pop $5
+        Pop $4
+        Pop $3
+        Pop $2
+        Pop $1
+        Exch $0
+FunctionEnd
+
 
 !macro NSIS_HOOK_PREINSTALL
 
@@ -26,62 +159,16 @@
     DetailPrint " Checking for install configuration..."
     DetailPrint "=========================================="
 
-    ; --------------------------------------------------------
-    ; $EXEPATH:
-    ; C:\Users\User\Downloads\MagendaSupport (2).exe
-    ; --------------------------------------------------------
-
     ${GetParent} "$EXEPATH" $0
-    ${GetBaseName} "$EXEPATH" $1
 
     DetailPrint "Installer path: $EXEPATH"
-    DetailPrint "Installer directory: $0"
-    DetailPrint "Installer base name: $1"
+    DetailPrint "Searching for the newest install config in: $0"
 
+    Push $0
+    Call MagendaFindNewestInstallConfig
+    Pop $2
 
-    ; --------------------------------------------------------
-    ; Default companion filename:
-    ;
-    ; MagendaSupport.exe -> install.json
-    ; --------------------------------------------------------
-
-    StrCpy $2 "$0\install.json"
-
-
-    ; --------------------------------------------------------
-    ; Detect browser duplicate suffix.
-    ;
-    ; Examples:
-    ;
-    ; MagendaSupport
-    ; MagendaSupport (1)
-    ; MagendaSupport (2)
-    ;
-    ; "MagendaSupport" = 14 characters
-    ; --------------------------------------------------------
-
-    StrCpy $3 $1 14
-    StrCpy $4 $1 "" 14
-
-    ${If} $3 == "MagendaSupport"
-
-        ; $4:
-        ;
-        ; ""
-        ; " (1)"
-        ; " (2)"
-
-        ${If} $4 != ""
-
-            StrCpy $2 "$0\install$4.json"
-
-        ${EndIf}
-
-    ${EndIf}
-
-
-    DetailPrint "Looking for companion config:"
-    DetailPrint "$2"
+    DetailPrint "Selected install config: $2"
 
 
     ; --------------------------------------------------------
