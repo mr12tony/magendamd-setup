@@ -415,6 +415,10 @@ Function RunMainBinary
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
 FunctionEnd
 
+Function RunAutoRegister
+  nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "--auto-register"
+FunctionEnd
+
 ; Uninstaller Pages
 ; 1. Confirm uninstall page
 Var DeleteAppDataCheckbox
@@ -732,18 +736,37 @@ Section Install
 SectionEnd
 
 Function .onInstSuccess
-  ; Preserve Tauri's explicit /R restart in silent and passive installers.
-  ${If} $PassiveMode = 1
-  ${OrIf} ${Silent}
-    ${GetOptions} $CMDLINE "/R" $R0
-    ${IfNot} ${Errors}
-      ${GetOptions} $CMDLINE "/ARGS" $R0
-      nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
+  ; Updater: сохраняем существующий запуск через /R и /ARGS.
+  ${If} $UpdateMode = 1
+
+    ${If} $PassiveMode = 1
+    ${OrIf} ${Silent}
+
+      ClearErrors
+      ${GetOptions} $CMDLINE "/R" $R0
+
+      ${IfNot} ${Errors}
+        StrCpy $R0 ""
+        ClearErrors
+
+        ${GetOptions} $CMDLINE "/ARGS" $R0
+
+        ${If} ${Errors}
+          StrCpy $R0 ""
+        ${EndIf}
+
+        nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
+      ${EndIf}
+
     ${EndIf}
-  ${ElseIf} $UpdateMode <> 1
-    ; NSIS calls this after successful installation, as the installer closes.
-    ; In the interactive wizard, this is after the user presses Finish.
-    Call RunMainBinary
+
+  ${Else}
+
+    ; Первоначальная установка или обычная переустановка.
+    ; В интерактивном режиме — после Finish.
+    ; В silent/passive — после успешного завершения.
+    Call RunAutoRegister
+
   ${EndIf}
 FunctionEnd
 

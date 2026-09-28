@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use std::{
     env, fs,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
 };
 
 use tauri::Manager;
@@ -47,27 +49,26 @@ fn install_config_path() -> Result<PathBuf, String> {
         .join("install.json"))
 }
 
+// Cache successes, missing files and errors so startup cannot repeatedly scan Downloads.
+static DOWNLOADS_IMPORT: OnceLock<Result<bool, String>> = OnceLock::new();
+static INSTALL_CONFIG_WRITE: Mutex<()> = Mutex::new(());
+
 pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
-    let path = install_config_path()?;
-
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Cannot read install config {}: {e}", path.display()))?;
-
-    let config: InstallConfig =
-        serde_json::from_str(&content).map_err(|e| format!("Invalid install config: {e}"))?;
-
-    if config.install_token.trim().is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(config))
+    read_install_config(&install_config_path()?)
 }
 
-pub fn save_install_config(token: &str, mode: InstallMode) -> Result<(), String> {
+fn read_install_config_contents(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::read(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!(
+            "Cannot read install config {}: {err}",
+            path.display()
+        )),
+    }
+}
+
+fn validate_install_config(token: &str, mode: InstallMode) -> Result<InstallConfig, String> {
     let token = token.trim();
 
     if token.is_empty() {
@@ -81,27 +82,181 @@ pub fn save_install_config(token: &str, mode: InstallMode) -> Result<(), String>
         return Err("Install token contains invalid characters.".to_string());
     }
 
-    let path = install_config_path()?;
+    Ok(InstallConfig {
+        install_token: token.to_string(),
+        mode,
+    })
+}
 
+fn parse_install_config(content: &[u8], path: &Path) -> Result<InstallConfig, String> {
+    let config: InstallConfig = serde_json::from_slice(content)
+        .map_err(|err| format!("Invalid install config {}: {err}", path.display()))?;
+
+    validate_install_config(&config.install_token, config.mode)
+        .map_err(|err| format!("Invalid install config {}: {err}", path.display()))
+}
+
+fn read_install_config(path: &Path) -> Result<Option<InstallConfig>, String> {
+    read_install_config_contents(path)?
+        .map(|content| parse_install_config(&content, path))
+        .transpose()
+}
+
+fn has_valid_install_config(path: &Path) -> Result<bool, String> {
+    // A malformed config can be repaired by importing a valid download.
+    // Filesystem errors must still be reported rather than treated as missing files.
+    Ok(read_install_config_contents(path)?
+        .is_some_and(|content| parse_install_config(&content, path).is_ok()))
+}
+
+fn write_install_config(path: &Path, config: &InstallConfig) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Invalid install config path.".to_string())?;
 
     fs::create_dir_all(parent)
-        .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        .map_err(|err| format!("Failed to create {}: {err}", parent.display()))?;
 
-    let config = InstallConfig {
-        install_token: token.to_string(),
-        mode,
-    };
+    let json = serde_json::to_string_pretty(config)
+        .map_err(|err| format!("Failed to serialize install config: {err}"))?;
 
-    let json = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("Failed to serialize install config: {e}"))?;
-
-    fs::write(&path, json).map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+    // Keep the old file intact until the replacement is fully written.
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|err| format!("Failed to create temporary install config: {err}"))?;
+    temporary
+        .write_all(json.as_bytes())
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|err| format!("Failed to write install config {}: {err}", path.display()))?;
+    temporary
+        .persist(path)
+        .map_err(|err| format!("Failed to save install config {}: {err}", path.display()))?;
 
     Ok(())
 }
+
+pub fn save_install_config(token: &str, mode: InstallMode) -> Result<(), String> {
+    let config = validate_install_config(token, mode)?;
+    let path = install_config_path()?;
+    let _guard = INSTALL_CONFIG_WRITE
+        .lock()
+        .map_err(|_| "Install config write lock is unavailable.".to_string())?;
+
+    write_install_config(&path, &config)
+}
+
+pub fn import_install_config_from_downloads() -> Result<bool, String> {
+    let home = env::var("HOME").map_err(|_| "HOME environment variable not found".to_string())?;
+    let downloads = PathBuf::from(home).join("Downloads");
+    import_install_config_once(&DOWNLOADS_IMPORT, &downloads, &install_config_path()?)
+}
+
+fn import_install_config_once(
+    attempt: &OnceLock<Result<bool, String>>,
+    downloads: &Path,
+    destination: &Path,
+) -> Result<bool, String> {
+    // A later deep link takes precedence even if the cached import attempt failed.
+    if has_valid_install_config(destination)? {
+        return Ok(false);
+    }
+
+    attempt
+        .get_or_init(|| import_install_config_from_directory(downloads, destination))
+        .clone()
+}
+
+fn import_install_config_from_directory(
+    downloads: &Path,
+    destination: &Path,
+) -> Result<bool, String> {
+    if has_valid_install_config(destination)? {
+        return Ok(false);
+    }
+
+    let entries = match fs::read_dir(downloads) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(format!(
+                "Cannot read Downloads directory {}: {err}. Check MagendaSupport's Downloads access in macOS System Settings > Privacy & Security > Files and Folders.",
+                downloads.display()
+            ));
+        }
+    };
+
+    let mut candidates = Vec::new();
+
+    for entry in entries {
+        let entry = entry
+            .map_err(|err| format!("Cannot read an entry in {}: {err}", downloads.display()))?;
+        let filename = entry.file_name();
+        let Some(name) = filename.to_str() else {
+            continue;
+        };
+        if !is_install_json_filename(name) {
+            continue;
+        }
+
+        let path = entry.path();
+        let metadata = entry
+            .metadata()
+            .map_err(|err| format!("Cannot read metadata for {}: {err}", path.display()))?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let modified = metadata.modified().map_err(|err| {
+            format!(
+                "Cannot read modification time for {}: {err}",
+                path.display()
+            )
+        })?;
+        candidates.push((path, modified));
+    }
+
+    // Choose by modification time, with a deterministic tie-breaker.
+    candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let Some((source, _)) = candidates.first() else {
+        return Ok(false);
+    };
+
+    // Do not silently fall back to an older token if the newest download is invalid.
+    let config = read_install_config(source)?.ok_or_else(|| {
+        format!(
+            "Install config disappeared before import: {}",
+            source.display()
+        )
+    })?;
+
+    // A deep link may have saved a config while Downloads access was being granted.
+    let _guard = INSTALL_CONFIG_WRITE
+        .lock()
+        .map_err(|_| "Install config write lock is unavailable.".to_string())?;
+    if has_valid_install_config(destination)? {
+        return Ok(false);
+    }
+
+    write_install_config(destination, &config)?;
+    Ok(true)
+}
+
+pub fn is_install_json_filename(name: &str) -> bool {
+    if name == "install.json" {
+        return true;
+    }
+
+    let number = name
+        .strip_prefix("install (")
+        .and_then(|value| value.strip_suffix(").json"))
+        .or_else(|| {
+            name.strip_prefix("install-")
+                .and_then(|value| value.strip_suffix(".json"))
+        });
+
+    number.is_some_and(|value| !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit()))
+}
+
+#[cfg(test)]
+mod install_config_tests;
 
 // ============================================================
 // RUSTDESK ID
@@ -345,4 +500,8 @@ pub fn open_rustdesk() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub fn get_rustdesk_id_headless() -> Result<Option<String>, String> {
+    super::headless::get_id(RUSTDESK_EXE)
 }

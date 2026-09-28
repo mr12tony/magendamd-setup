@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { message, ask } from "@tauri-apps/plugin-dialog";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { platform } from "@tauri-apps/plugin-os";
 import { getSystemInfo } from "./system";
 import { getInstallConfigFromUrl } from "./deepLink";
 
@@ -43,18 +44,18 @@ type InstallConfig = {
   mode: InstallMode;
 };
 
-function getBackendUrl(mode: InstallMode) {
-  switch (mode) {
-    case "dev":
-      return "https://apidev.magendamd.com/api/v1";
+// function getBackendUrl(mode: InstallMode) {
+//   switch (mode) {
+//     case "dev":
+//       return "https://apidev.magendamd.com/api/v1";
 
-    case "prod":
-      return "https://api.magendamd.com/api/v1";
+//     case "prod":
+//       return "https://api.magendamd.com/api/v1";
 
-    case "local":
-      return "http://127.0.0.1:8000/api/v1";
-  }
-}
+//     case "local":
+//       return "http://127.0.0.1:8000/api/v1";
+//   }
+// }
 
 function getFrontendUrl(mode: InstallMode = "prod") {
   switch (mode) {
@@ -95,26 +96,10 @@ async function closeWindow() {
 
 function App() {
   const [registration, setRegistration] = useState<RegistrationData | null>(
-    () => {
-      const saved = localStorage.getItem("device_registration");
-
-      if (!saved) {
-        return null;
-      }
-
-      try {
-        return JSON.parse(saved) as RegistrationData;
-      } catch {
-        return null;
-      }
-    },
+    null,
   );
 
-  const [computerName, setComputerName] = useState(() => {
-    const saved = localStorage.getItem("computer_name");
-
-    return saved ?? "";
-  });
+  const [computerName, setComputerName] = useState("");
 
   // const [supportMessage, setSupportMessage] = useState("");
 
@@ -126,15 +111,28 @@ function App() {
     null,
   );
 
-  const [currentRustdeskId, setCurrentRustdeskId] = useState("");
+  const [, /*currentRustdeskId*/ setCurrentRustdeskId] = useState("");
 
-  const [permissions, setPermissions] =
-    useState<RustDeskPermissionsStatus | null>(null);
+  const [, setPermissions] = useState<RustDeskPermissionsStatus | null>(null);
 
-  const [status, setStatus] = useState<RustDeskStatus | null>(null);
+  const [, setStatus] = useState<RustDeskStatus | null>(null);
 
-  function canRegisterRustDesk(value: RustDeskStatus) {
-    return value.installed && !!value.id?.trim();
+  // function canRegisterRustDesk(value: RustDeskStatus) {
+  //   return value.installed && !!value.id?.trim();
+  // }
+
+  async function loadRegistrationState() {
+    const saved = await invoke<RegistrationData | null>(
+      "get_registration_state",
+    );
+
+    setRegistration(saved);
+
+    if (saved) {
+      setCurrentRustdeskId(saved.currentRustdeskId);
+    }
+
+    return saved;
   }
 
   async function ensureComputerName() {
@@ -144,24 +142,37 @@ function App() {
       return current;
     }
 
-    const saved = localStorage.getItem("computer_name")?.trim();
+    try {
+      const saved = await invoke<RegistrationData | null>(
+        "get_registration_state",
+      );
 
-    if (saved) {
-      setComputerName(saved);
-      return saved;
+      const savedName = saved?.computerName?.trim();
+
+      if (savedName) {
+        setComputerName(savedName);
+        return savedName;
+      }
+    } catch {
+      // Состояние регистрации недоступно — пробуем hostname.
     }
 
-    const info = await getSystemInfo();
-    const value = info.hostname?.trim() ?? "";
+    let name = "";
 
-    if (!value) {
-      throw new Error("Computer name is missing.");
+    try {
+      const info = await getSystemInfo();
+      name = info.hostname?.trim() ?? "";
+    } catch {
+      // Ниже вернём понятную ошибку без системных подробностей.
     }
 
-    localStorage.setItem("computer_name", value);
-    setComputerName(value);
+    if (!name) {
+      throw new Error("Please enter a computer name.");
+    }
 
-    return value;
+    setComputerName(name);
+
+    return name;
   }
 
   async function checkForUpdates() {
@@ -214,33 +225,33 @@ function App() {
     );
   }
 
-  function getRustDeskHealthProblems(value: RustDeskStatus) {
-    const problems: string[] = [];
+  // function getRustDeskHealthProblems(value: RustDeskStatus) {
+  //   const problems: string[] = [];
 
-    if (!value.installed) {
-      problems.push("RustDesk is not installed");
-    }
+  //   if (!value.installed) {
+  //     problems.push("RustDesk is not installed");
+  //   }
 
-    if (!value.version?.startsWith("1.4.9")) {
-      problems.push(
-        `Unexpected RustDesk version: ${value.version ?? "unknown"}`,
-      );
-    }
+  //   if (!value.version?.startsWith("1.4.9")) {
+  //     problems.push(
+  //       `Unexpected RustDesk version: ${value.version ?? "unknown"}`,
+  //     );
+  //   }
 
-    if (!value.service_running) {
-      problems.push("RustDesk service is not running");
-    }
+  //   if (!value.service_running) {
+  //     problems.push("RustDesk service is not running");
+  //   }
 
-    if (!value.configured) {
-      problems.push("RustDesk configuration is invalid");
-    }
+  //   if (!value.configured) {
+  //     problems.push("RustDesk configuration is invalid");
+  //   }
 
-    if (!value.id?.trim()) {
-      problems.push("RustDesk ID is missing");
-    }
+  //   if (!value.id?.trim()) {
+  //     problems.push("RustDesk ID is missing");
+  //   }
 
-    return problems;
-  }
+  //   return problems;
+  // }
 
   function getErrorMessage(err: unknown, fallback: string) {
     if (err instanceof Error) {
@@ -275,19 +286,46 @@ function App() {
   // ============================================================
 
   async function initialize(skipMissingTokenScreen = false) {
+    const isMacOS = platform() === "macos";
+
     try {
-      const config = await invoke<InstallConfig | null>("get_install_config");
+      const config = await invoke<InstallConfig | null>(
+        isMacOS ? "initialize_install_config" : "get_install_config",
+      );
 
       if (config?.install_token?.trim()) {
         setInstallConfig(config);
         setMissingInstallToken(false);
 
         await unlockWindow();
+
+        let saved: RegistrationData | null = null;
+
+        try {
+          saved = await loadRegistrationState();
+        } catch {
+          // Config прочитан успешно, но состояние регистрации недоступно.
+          // Не сбрасываем installConfig и не показываем отсутствие токена.
+          setRegistration(null);
+        }
+
+        let name = saved?.computerName?.trim() ?? "";
+
+        if (!name) {
+          try {
+            const info = await getSystemInfo();
+            name = info.hostname?.trim() ?? "";
+          } catch {
+            // Пользователь сможет ввести имя вручную.
+            name = "";
+          }
+        }
+
+        setComputerName(name);
       } else {
         setInstallConfig(null);
-
-        localStorage.removeItem("device_registration");
         setRegistration(null);
+        setComputerName("");
 
         if (skipMissingTokenScreen) {
           setMissingInstallToken(false);
@@ -299,6 +337,12 @@ function App() {
       }
     } catch (err) {
       const msg = getErrorMessage(err, "Failed to initialize the application.");
+
+      if (isMacOS) {
+        setInstallConfig(null);
+        setMissingInstallToken(true);
+        await unlockWindow();
+      }
 
       await message(msg, {
         title: "Configuration error",
@@ -312,92 +356,29 @@ function App() {
   // ============================================================
 
   async function registerDevice(config: InstallConfig) {
-    const cleanToken = config.install_token.trim();
-
-    if (!cleanToken) {
+    if (!config.install_token.trim()) {
       throw new Error("Installation token is missing.");
     }
 
-    const cleanComputerName = await ensureComputerName();
+    const name = await ensureComputerName();
 
     let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
 
-    // Пытаемся привести RustDesk к правильной конфигурации.
     if (!isRustDeskHealthy(rustdeskStatus)) {
       await invoke("configure_rustdesk");
 
       rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
     }
 
-    // Полный health check может не пройти,
-    // но если RustDesk установлен и ID уже есть —
-    // устройство всё равно можно зарегистрировать.
-    if (!canRegisterRustDesk(rustdeskStatus)) {
-      const problems = getRustDeskHealthProblems(rustdeskStatus);
-
-      console.error("RustDesk cannot be registered:", rustdeskStatus);
-
-      throw new Error(
-        `RustDesk is not ready for registration.\n\n${problems.join("\n")}`,
-      );
-    }
-
-    // Если health неполный — только логируем, но регистрацию не блокируем.
-    if (!isRustDeskHealthy(rustdeskStatus)) {
-      console.warn(
-        "RustDesk health check is incomplete, continuing registration:",
-        rustdeskStatus,
-      );
-    }
-
-    const rustdeskId = rustdeskStatus.id!.trim();
-
     setStatus(rustdeskStatus);
-    setCurrentRustdeskId(rustdeskId);
 
-    const backendUrl = getBackendUrl(config.mode);
-
-    const response = await fetch(`${backendUrl}/rustdesk/devices`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-RustDesk-Key": cleanToken,
-      },
-      body: JSON.stringify({
-        device_id: rustdeskId,
-        password: import.meta.env.VITE_PERMANENT_PASSWORD,
-        name: cleanComputerName,
-      }),
+    const registrationData = await invoke<RegistrationData>("register_device", {
+      computerName: name,
     });
 
-    if (!response.ok) {
-      let serverMessage = "";
-
-      try {
-        serverMessage = await response.text();
-      } catch {
-        //
-      }
-
-      throw new Error(
-        serverMessage ||
-          `Failed to register device. Server returned HTTP ${response.status}.`,
-      );
-    }
-
-    const registrationData: RegistrationData = {
-      registered: true,
-      currentRustdeskId: rustdeskId,
-      computerName: cleanComputerName,
-      registeredAt: new Date().toISOString(),
-    };
-
-    localStorage.setItem(
-      "device_registration",
-      JSON.stringify(registrationData),
-    );
-
     setRegistration(registrationData);
+    setComputerName(registrationData.computerName);
+    setCurrentRustdeskId(registrationData.currentRustdeskId);
 
     return registrationData;
   }
@@ -657,41 +638,66 @@ function App() {
   }
 
   // ============================================================
-  // COMPUTER NAME
-  // ============================================================
-
-  useEffect(() => {
-    (async () => {
-      const saved = localStorage.getItem("computer_name");
-
-      if (saved !== null && saved.trim() !== "") {
-        return;
-      }
-
-      try {
-        const info = await getSystemInfo();
-
-        const value = info.hostname || "";
-
-        setComputerName(value);
-
-        localStorage.setItem("computer_name", value);
-      } catch (err) {
-        console.error("Failed to get system info:", err);
-      }
-    })();
-  }, []);
-
-  // ============================================================
   // INITIALIZE + DEEP LINKS
   // ============================================================
 
+  const handleDeepLinksRef = useRef(handleDeepLinks);
+
   useEffect(() => {
+    handleDeepLinksRef.current = handleDeepLinks;
+  });
+
+  useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | undefined;
+
+    async function subscribe() {
+      try {
+        const stop = await onOpenUrl(async (urls) => {
+          if (disposed) {
+            return;
+          }
+
+          try {
+            await handleDeepLinksRef.current(urls);
+          } catch {
+            if (!disposed) {
+              await message("Failed to process the connection link.", {
+                title: "Magenda Support",
+                kind: "error",
+              });
+            }
+          }
+        });
+
+        if (disposed) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      } catch {
+        // Не выводим URL: он может содержать install token.
+        console.error("Failed to subscribe to connection links.");
+      }
+    }
+
+    void subscribe();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
 
     (async () => {
       try {
         const urls = await getCurrent();
+        if (disposed) {
+          return;
+        }
 
         const installUrl =
           urls?.find((url) => getInstallConfigFromUrl(url) !== null) ?? null;
@@ -740,24 +746,116 @@ function App() {
           // Обычный запуск приложения без deep link.
           await initialize(false);
 
-          const rustdeskStatus = await invoke<RustDeskStatus>(
+          if (disposed) {
+            return;
+          }
+
+          let rustdeskStatus = await invoke<RustDeskStatus>(
             "get_rustdesk_status",
           );
 
-          setStatus(rustdeskStatus);
-
-          if (rustdeskStatus.id?.trim()) {
-            setCurrentRustdeskId(rustdeskStatus.id.trim());
+          if (disposed) {
+            return;
           }
 
-          await checkPermissions();
-        }
+          // На первом GUI-запуске macOS устанавливаем RustDesk.
+          if (platform() === "macos" && !rustdeskStatus.installed) {
+            setProcessing(true);
 
-        // Deep link пришёл, когда приложение уже запущено.
-        unlisten = await onOpenUrl(async (urls) => {
-          await handleDeepLinks(urls);
-        });
+            try {
+              await invoke("configure_rustdesk");
+
+              if (disposed) {
+                return;
+              }
+
+              rustdeskStatus = await invoke<RustDeskStatus>(
+                "get_rustdesk_status",
+              );
+
+              if (!rustdeskStatus.installed) {
+                throw new Error(
+                  "RustDesk installation did not complete. Please try again.",
+                );
+              }
+            } finally {
+              if (!disposed) {
+                setProcessing(false);
+              }
+            }
+          }
+
+          if (disposed) {
+            return;
+          }
+
+          setStatus(rustdeskStatus);
+          setCurrentRustdeskId(rustdeskStatus.id?.trim() ?? "");
+
+          await checkPermissions();
+
+          if (disposed) {
+            return;
+          }
+
+          // На macOS первый обычный запуск завершает регистрацию.
+          // Читаем актуальный config из Rust, а не React state
+          // из замыкания эффекта.
+          if (platform() === "macos") {
+            const config = await invoke<InstallConfig | null>(
+              "get_install_config",
+            );
+
+            if (disposed) {
+              return;
+            }
+
+            if (config?.install_token?.trim()) {
+              const existing = await invoke<RegistrationData | null>(
+                "get_registration_state",
+              ).catch(() => null);
+
+              if (disposed) {
+                return;
+              }
+
+              if (existing) {
+                setRegistration(existing);
+                setComputerName(existing.computerName);
+                setCurrentRustdeskId(existing.currentRustdeskId);
+
+                // Уже зарегистрировано: оставляем GUI для Rename.
+                return;
+              }
+
+              setProcessing(true);
+
+              try {
+                const result = await invoke<RegistrationData>(
+                  "auto_register_device",
+                );
+
+                if (disposed) {
+                  return;
+                }
+
+                setRegistration(result);
+                setComputerName(result.computerName);
+                setCurrentRustdeskId(result.currentRustdeskId);
+
+                await closeWindow();
+              } finally {
+                if (!disposed) {
+                  setProcessing(false);
+                }
+              }
+            }
+          }
+        }
       } catch (err) {
+        if (disposed) {
+          return;
+        }
         console.error("Application startup failed:", err);
 
         const msg = getErrorMessage(
@@ -773,6 +871,52 @@ function App() {
     })();
 
     return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    getCurrentWindow()
+      .onFocusChanged(async ({ payload: focused }) => {
+        if (!focused || disposed) {
+          return;
+        }
+
+        try {
+          const saved = await invoke<RegistrationData | null>(
+            "get_registration_state",
+          );
+
+          if (disposed) {
+            return;
+          }
+
+          setRegistration(saved);
+
+          if (saved) {
+            setCurrentRustdeskId(saved.currentRustdeskId);
+          }
+        } catch {
+          // При ошибке чтения сохраняем последнее отображённое состояние.
+        }
+      })
+      .then((stop) => {
+        if (disposed) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      })
+      .catch(() => {
+        // Если подписка не создалась, состояние всё равно
+        // загружается при запуске через initialize().
+      });
+
+    return () => {
+      disposed = true;
       unlisten?.();
     };
   }, []);
@@ -958,11 +1102,7 @@ function App() {
                 type="text"
                 value={computerName}
                 onChange={(e) => {
-                  const value = e.target.value;
-
-                  setComputerName(value);
-
-                  localStorage.setItem("computer_name", value);
+                  setComputerName(e.target.value);
                 }}
                 disabled={processing}
                 id="computerName"
@@ -976,10 +1116,8 @@ function App() {
                 type="button"
                 onClick={handleRegister}
                 disabled={
-                  !installConfig ||
-                  processing ||
-                  !computerName.trim() ||
-                  !currentRustdeskId
+                  !installConfig || processing || !computerName.trim() /*||
+                  !currentRustdeskId*/
                 }
                 className="
                       ms-auto

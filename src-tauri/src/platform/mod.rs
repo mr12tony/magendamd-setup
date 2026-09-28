@@ -20,6 +20,8 @@ mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
 
+mod headless;
+
 #[cfg(target_os = "windows")]
 pub use windows::*;
 

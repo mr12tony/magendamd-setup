@@ -43,58 +43,121 @@ fn install_config_path() -> Result<PathBuf, String> {
         .join("install.json"))
 }
 
-pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
-    let path = install_config_path()?;
+fn user_install_config_path() -> Result<PathBuf, String> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| {
+            "LOCALAPPDATA environment variable not found".to_owned()
+        })?;
 
-    if !path.exists() {
-        return Ok(None);
-    }
+    Ok(PathBuf::from(local_app_data)
+        .join("MagendaSupport")
+        .join("install.json"))
+}
 
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Cannot read install config {}: {e}", path.display()))?;
+fn read_install_config(
+    path: &Path,
+) -> Result<Option<InstallConfig>, String> {
+    let content = match fs::read(path) {
+        Ok(content) => content,
 
-    let config: InstallConfig =
-        serde_json::from_str(&content).map_err(|e| format!("Invalid install config: {e}"))?;
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return Ok(None);
+        }
 
-    if config.install_token.trim().is_empty() {
-        return Ok(None);
+        Err(_) => {
+            return Err("Cannot read installation configuration.".to_owned());
+        }
+    };
+
+    let config: InstallConfig = serde_json::from_slice(&content)
+        .map_err(|_| {
+            "Invalid installation configuration.".to_owned()
+        })?;
+
+    let token = config.install_token.trim();
+
+    if token.is_empty()
+        || !token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Invalid installation token.".to_owned());
     }
 
     Ok(Some(config))
 }
 
-pub fn save_install_config(token: &str, mode: InstallMode) -> Result<(), String> {
+pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
+    let user_path = user_install_config_path()?;
+
+    if let Some(config) = read_install_config(&user_path)? {
+        return Ok(Some(config));
+    }
+
+    read_install_config(&install_config_path()?)
+}
+
+pub fn save_install_config(
+    token: &str,
+    mode: InstallMode,
+) -> Result<(), String> {
+    use std::io::Write;
+
     let token = token.trim();
 
     if token.is_empty() {
-        return Err("Install token is empty.".to_string());
+        return Err("Install token is empty.".to_owned());
     }
 
     if !token
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Err("Install token contains invalid characters.".to_string());
+        return Err("Install token contains invalid characters.".to_owned());
     }
 
-    let path = install_config_path()?;
+    let path = user_install_config_path()?;
 
     let parent = path
         .parent()
-        .ok_or_else(|| "Invalid install config path.".to_string())?;
+        .ok_or_else(|| {
+            "Invalid installation configuration path.".to_owned()
+        })?;
 
     fs::create_dir_all(parent)
-        .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        .map_err(|_| {
+            "Cannot create installation configuration directory.".to_owned()
+        })?;
 
     let config = InstallConfig {
-        install_token: token.to_string(),
+        install_token: token.to_owned(),
         mode,
     };
 
-    let json = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("Failed to serialize install config: {e}"))?;
+    let content = serde_json::to_vec_pretty(&config)
+        .map_err(|_| {
+            "Cannot serialize installation configuration.".to_owned()
+        })?;
 
-    fs::write(&path, json).map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|_| {
+            "Cannot create temporary installation configuration.".to_owned()
+        })?;
+
+    temporary
+        .write_all(&content)
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|_| {
+            "Cannot write installation configuration.".to_owned()
+        })?;
+
+    temporary
+        .persist(&path)
+        .map_err(|_| {
+            "Cannot save installation configuration.".to_owned()
+        })?;
 
     Ok(())
 }
@@ -248,4 +311,8 @@ pub fn open_rustdesk() -> Result<(), String> {
         .map_err(|e| format!("Failed to open RustDesk: {e}"))?;
 
     Ok(())
+}
+
+pub fn get_rustdesk_id_headless() -> Result<Option<String>, String> {
+    super::headless::get_id(RUSTDESK_EXE)
 }
