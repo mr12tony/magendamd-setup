@@ -269,9 +269,7 @@ async fn download_and_install_update(
         .await
         .map_err(|e| e.to_string())?;
 
-    app.restart();
-
-    Ok(())
+    app.restart()
 }
 
 fn registration_error(code: i32) -> String {
