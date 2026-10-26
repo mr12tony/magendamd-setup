@@ -94,6 +94,19 @@ and architecture with a personalized `Content-Disposition` filename. That servic
 is outside this repository. Tokens remain visible in filenames and download
 history; the installer does not print its path to installation logs.
 
+## Tauri plugins and permissions
+
+`src-tauri/capabilities/default.json` grants the frontend access to window
+controls, event subscriptions, message dialogs, deep links, platform URLs and
+the computer hostname. In the current OS plugin, `platform()` reads injected
+data; only `hostname()` needs an IPC permission.
+
+RustDesk setup, file access and System Settings launch run in native Rust
+commands. Application updates use the Rust updater plugin and `app.restart()`.
+These operations do not need frontend `fs`, `shell`, `process` or `updater`
+permissions. Keep the Rust updater plugin and the single-instance plugin: they
+handle application updates and forward deep links/installer requests.
+
 ## Validation
 
 ```sh

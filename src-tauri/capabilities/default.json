@@ -6,131 +6,21 @@
     "main"
   ],
   "permissions": [
-    "core:default",
-    "dialog:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-is-visible",
     "core:window:allow-close",
     "core:window:allow-show",
     "core:window:allow-unminimize",
     "core:window:allow-set-focus",
-    "opener:default",
-    "os:default",
-    "os:allow-hostname",
-    "fs:default",
-    "log:default",
-    "deep-link:default",
-    "updater:default",
-    "process:allow-restart",
     "core:window:allow-set-closable",
     "core:window:allow-set-minimizable",
     "core:window:allow-set-maximizable",
     "core:window:allow-set-resizable",
-    {
-      "identifier": "fs:allow-exists",
-      "allow": [
-        "/Applications/RustDesk.app",
-        "/Applications/RustDesk.app/Contents/MacOS/RustDesk",
-        "C:\\Program Files\\RustDesk\\RustDesk.exe",
-        "$HOME/**/access-token.txt",
-        "$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml"
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-text-file",
-      "allow": [
-        "$HOME/**/access-token.txt",
-        "$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml"
-      ]
-    },
-    {
-      "identifier": "fs:allow-write-text-file",
-      "allow": [
-        "$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml"
-      ]
-    },
-    "shell:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "windows-installer",
-          "cmd": "C:\\Windows\\System32\\cmd.exe",
-          "args": true
-        },
-        {
-          "name": "rustdesk-macos",
-          "cmd": "/Applications/RustDesk.app/Contents/MacOS/RustDesk",
-          "args": true
-        },
-        {
-          "name": "rustdesk-windows",
-          "cmd": "C:\\Program Files\\RustDesk\\RustDesk.exe",
-          "args": true
-        },
-        {
-          "name": "hdiutil",
-          "cmd": "/usr/bin/hdiutil",
-          "args": true
-        },
-        {
-          "name": "ditto",
-          "cmd": "/usr/bin/ditto",
-          "args": true
-        },
-        {
-          "name": "rm",
-          "cmd": "/bin/rm",
-          "args": true
-        },
-        {
-          "name": "killall",
-          "cmd": "/usr/bin/killall",
-          "args": true
-        },
-        {
-          "name": "osascript",
-          "cmd": "/usr/bin/osascript",
-          "args": true
-        },
-        {
-          "name": "open",
-          "cmd": "/usr/bin/open",
-          "args": true
-        },
-        {
-          "name": "cmd",
-          "cmd": "C:\\Windows\\System32\\cmd.exe",
-          "args": true
-        },
-        {
-          "name": "sh",
-          "cmd": "/bin/sh",
-          "args": true
-        },
-        {
-          "name": "powershell",
-          "cmd": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-          "args": true
-        },
-        {
-          "name": "taskkill",
-          "cmd": "C:\\Windows\\System32\\taskkill.exe",
-          "args": true
-        },
-        {
-          "name": "bash",
-          "cmd": "/bin/bash",
-          "args": true
-        },
-        {
-          "name": "open",
-          "cmd": "open",
-          "args": [
-            {
-              "validator": "^(?:-a|RustDesk)$"
-            }
-          ]
-        }
-      ]
-    }
+    "dialog:allow-message",
+    "deep-link:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
+    "os:allow-hostname"
   ]
 }
