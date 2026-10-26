@@ -407,7 +407,7 @@ Var AppStartMenuFolder
 ; because the installation page has useful info that can be used debug any issues with the installer.
 !define MUI_FINISHPAGE_NOAUTOCLOSE
 ; No run or desktop shortcut checkboxes.
-; Successful interactive installs launch the app from .onInstSuccess.
+; .onInstSuccess starts registration; the app opens its GUI only on failure.
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_FINISH
 
@@ -416,7 +416,10 @@ Function RunMainBinary
 FunctionEnd
 
 Function RunAutoRegister
-  nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "--auto-register"
+  ; Pass the original installer path, not the installed application's filename.
+  ; Rust resolves filename > companion JSON > saved config without logging tokens.
+  ; Success exits silently; registration failure opens the GUI as this user.
+  nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" '--auto-register --installer-path "$EXEPATH"'
 FunctionEnd
 
 ; Uninstaller Pages

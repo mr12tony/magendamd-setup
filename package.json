@@ -7,10 +7,17 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
+    "uninstall:macos": "sudo /bin/bash ./scripts/macos/uninstall-rustdesk.sh",
+    "uninstall:win": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./scripts/windows/cleanup-windows.ps1\"",
     "build:mac:app": "tauri build --config src-tauri/tauri.macos.conf.json --bundles app",
-    "build:win:portable": "tauri build --config src-tauri/tauri.windows.conf.json --no-bundle"
+    "build:macos:release": "/bin/bash ./scripts/macos/build-release.sh",
+    "build:macos:dmg": "/bin/bash ./scripts/macos/build-dmg.sh",
+    "build:win:portable": "tauri build --config src-tauri/tauri.windows.conf.json --no-bundle",
+    "build:win:release": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./scripts/windows/build-release.ps1\"",
+    "sign:win:release": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./scripts/windows/sign-release.ps1\""
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

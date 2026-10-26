@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { message, ask } from "@tauri-apps/plugin-dialog";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -7,8 +8,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { platform } from "@tauri-apps/plugin-os";
 import { getSystemInfo } from "./system";
 import { getInstallConfigFromUrl } from "./deepLink";
+import { RegistrationQueue } from "./registrationQueue";
 
 import "./App.css";
+
+const REQUIRED_RUSTDESK_VERSION = "1.5.0";
 
 type UpdateInfo = {
   available: boolean;
@@ -30,6 +34,19 @@ type RustDeskStatus = {
   id: string | null;
 };
 
+function hasRequiredRustDeskVersion(status: RustDeskStatus) {
+  const version = status.version?.trim().match(/^(\d+\.\d+\.\d+)(?:$|[.+-])/)?.[1];
+  return status.installed && version === REQUIRED_RUSTDESK_VERSION;
+}
+
+function assertRequiredRustDeskVersion(status: RustDeskStatus) {
+  if (!hasRequiredRustDeskVersion(status)) {
+    throw new Error(
+      `RustDesk ${REQUIRED_RUSTDESK_VERSION} installation or update did not complete. Please try again.`,
+    );
+  }
+}
+
 type RegistrationData = {
   registered: boolean;
   currentRustdeskId: string;
@@ -42,6 +59,12 @@ type InstallMode = "dev" | "prod" | "local";
 type InstallConfig = {
   install_token: string;
   mode: InstallMode;
+};
+
+type InstallerLaunch = {
+  request_id: number;
+  config: InstallConfig | null;
+  error: string | null;
 };
 
 // function getBackendUrl(mode: InstallMode) {
@@ -94,6 +117,14 @@ async function closeWindow() {
   await window.close();
 }
 
+async function showWindow() {
+  await unlockWindow();
+  const window = getCurrentWindow();
+  await window.show();
+  await window.unminimize();
+  await window.setFocus();
+}
+
 function App() {
   const [registration, setRegistration] = useState<RegistrationData | null>(
     null,
@@ -111,11 +142,21 @@ function App() {
     null,
   );
 
+  // A failed candidate stays in memory for Retry; installConfig is the active config.
+  const [pendingConfig, setPendingConfig] = useState<InstallConfig | null>(
+    null,
+  );
+  const [installerConfigError, setInstallerConfigError] = useState<
+    string | null
+  >(null);
+  const registrationQueue = useRef(new RegistrationQueue()).current;
+  const lastInstallerRequest = useRef(0);
+
   const [, /*currentRustdeskId*/ setCurrentRustdeskId] = useState("");
 
   const [, setPermissions] = useState<RustDeskPermissionsStatus | null>(null);
 
-  const [, setStatus] = useState<RustDeskStatus | null>(null);
+  const [status, setStatus] = useState<RustDeskStatus | null>(null);
 
   // function canRegisterRustDesk(value: RustDeskStatus) {
   //   return value.installed && !!value.id?.trim();
@@ -176,8 +217,17 @@ function App() {
   }
 
   async function checkForUpdates() {
+    if (registrationQueue.busy || pendingConfig || installerConfigError) {
+      return;
+    }
+
+    const version = registrationQueue.version;
     try {
       const update = await invoke<UpdateInfo>("check_for_updates");
+
+      if (registrationQueue.busy || version !== registrationQueue.version) {
+        return;
+      }
 
       if (!update.available) {
         console.log("Application is up to date.");
@@ -197,7 +247,11 @@ function App() {
         },
       );
 
-      if (!install) {
+      if (
+        !install ||
+        registrationQueue.busy ||
+        version !== registrationQueue.version
+      ) {
         return;
       }
 
@@ -207,7 +261,9 @@ function App() {
     } catch (err) {
       console.error("Updater failed:", err);
     } finally {
-      setProcessing(false);
+      if (!registrationQueue.busy) {
+        setProcessing(false);
+      }
     }
   }
 
@@ -217,8 +273,7 @@ function App() {
 
   function isRustDeskHealthy(value: RustDeskStatus) {
     return (
-      value.installed &&
-      value.version?.startsWith("1.4.9") === true &&
+      hasRequiredRustDeskVersion(value) &&
       value.service_running &&
       value.configured &&
       !!value.id?.trim()
@@ -290,7 +345,9 @@ function App() {
 
     try {
       const config = await invoke<InstallConfig | null>(
-        isMacOS ? "initialize_install_config" : "get_install_config",
+        isMacOS && !skipMissingTokenScreen
+          ? "initialize_install_config"
+          : "get_install_config",
       );
 
       if (config?.install_token?.trim()) {
@@ -333,9 +390,16 @@ function App() {
           setMissingInstallToken(true);
         }
 
-        await lockWindow();
+        if (!skipMissingTokenScreen) {
+          await lockWindow();
+        }
       }
     } catch (err) {
+      // A manual candidate can repair a missing or unreadable active config.
+      if (skipMissingTokenScreen) {
+        return;
+      }
+
       const msg = getErrorMessage(err, "Failed to initialize the application.");
 
       if (isMacOS) {
@@ -370,12 +434,20 @@ function App() {
       rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
     }
 
+    if (platform() === "macos") {
+      assertRequiredRustDeskVersion(rustdeskStatus);
+    }
+
     setStatus(rustdeskStatus);
 
     const registrationData = await invoke<RegistrationData>("register_device", {
       computerName: name,
+      token: config.install_token,
+      mode: config.mode,
     });
 
+    setInstallConfig(config);
+    setMissingInstallToken(false);
     setRegistration(registrationData);
     setComputerName(registrationData.computerName);
     setCurrentRustdeskId(registrationData.currentRustdeskId);
@@ -387,32 +459,141 @@ function App() {
   // MANUAL REGISTER
   // ============================================================
 
+  async function runRegistrationTask(
+    task: (isLatest: () => boolean) => Promise<void>,
+    manual = false,
+  ) {
+    setProcessing(true);
+    try {
+      await registrationQueue.enqueue(task, manual);
+    } finally {
+      if (!registrationQueue.busy) {
+        setProcessing(false);
+      }
+    }
+  }
+
+  async function requestRegistration(config: InstallConfig) {
+    setPendingConfig(config);
+    setInstallerConfigError(null);
+
+    await runRegistrationTask(async (isLatest) => {
+      try {
+        if (platform() === "windows") {
+          await showWindow();
+        } else {
+          await unlockWindow();
+        }
+        await registerDevice(config);
+
+        if (!isLatest()) {
+          return;
+        }
+
+        setPendingConfig(null);
+        await message(
+          "This device has been successfully connected to support.",
+          {
+            title: "Device registered",
+            kind: "info",
+          },
+        );
+
+        // Another link may arrive while the success dialog is open.
+        if (isLatest() && platform() !== "macos") {
+          await closeWindow();
+        }
+      } catch (err) {
+        if (!isLatest()) {
+          return;
+        }
+
+        await message(getErrorMessage(err, "Failed to register the device."), {
+          title: "Device registration error",
+          kind: "error",
+        });
+      }
+    }, true);
+  }
+
   async function handleRegister() {
-    if (!installConfig || !computerName.trim()) {
+    const config = pendingConfig ?? installConfig;
+
+    if (!config || !computerName.trim()) {
       return;
     }
 
+    await requestRegistration(config);
+  }
+
+  async function registerFromInstaller(
+    launch: InstallerLaunch,
+    isLatest: () => boolean,
+  ) {
+    if (!isLatest()) return;
+
+    setInstallerConfigError(launch.error);
+    setPendingConfig(launch.config);
+
     try {
-      setProcessing(true);
+      if (launch.error) throw new Error(launch.error);
+      const wasVisible = await getCurrentWindow().isVisible();
+      if (!isLatest()) return;
 
-      await registerDevice(installConfig);
-
-      await message("This device has been successfully connected to support.", {
-        title: "Device registered",
-        kind: "info",
+      const result = await invoke<RegistrationData>("auto_register_device", {
+        config: launch.config,
       });
 
-      await closeWindow();
+      if (launch.config) setInstallConfig(launch.config);
+      setMissingInstallToken(false);
+      setRegistration(result);
+      setComputerName(result.computerName);
+      setCurrentRustdeskId(result.currentRustdeskId);
+
+      if (!isLatest()) return;
+      setPendingConfig(null);
+      if (!wasVisible) await closeWindow();
     } catch (err) {
-      const msg = getErrorMessage(err, "Failed to register the device.");
-
-      await message(msg, {
-        title: "Device registration error",
-        kind: "error",
-      });
-    } finally {
-      setProcessing(false);
+      if (!isLatest()) return;
+      // First-time installation may have no saved name yet. Keep Retry usable.
+      if (!launch.error) await ensureComputerName().catch(() => undefined);
+      if (!isLatest()) return;
+      await showWindow();
+      if (!isLatest()) return;
+      await message(
+        getErrorMessage(
+          err,
+          "Automatic registration failed. Please try again.",
+        ),
+        {
+          title: "Device registration error",
+          kind: "error",
+        },
+      );
     }
+  }
+
+  async function handleInstallerLaunch() {
+    const manualVersion = registrationQueue.manualVersion;
+    const launch = await invoke<InstallerLaunch | null>("get_installer_launch");
+    if (!launch || launch.request_id <= lastInstallerRequest.current) return;
+    lastInstallerRequest.current = launch.request_id;
+    // Only an active/new manual request takes precedence, not one from earlier
+    // in the session. A new installer may intentionally change the account.
+    if (
+      registrationQueue.hasPendingManualRequest ||
+      manualVersion !== registrationQueue.manualVersion
+    ) {
+      await invoke("clear_installer_launch", { requestId: launch.request_id });
+      return;
+    }
+
+    await runRegistrationTask(async (isLatest) => {
+      await invoke("clear_installer_launch", { requestId: launch.request_id });
+      if (!isLatest()) return;
+      await initialize(!!launch.config || !!launch.error);
+      await registerFromInstaller(launch, isLatest);
+    });
   }
 
   // ============================================================
@@ -427,50 +608,10 @@ function App() {
         continue;
       }
 
-      try {
-        setProcessing(true);
-
-        const config: InstallConfig = {
-          install_token: deepLinkConfig.token,
-          mode: deepLinkConfig.mode,
-        };
-
-        // 1. Сохраняем config.
-        await invoke("save_install_config", {
-          token: config.install_token,
-          mode: config.mode,
-        });
-
-        // 2. Обновляем frontend state.
-        setInstallConfig(config);
-        setMissingInstallToken(false);
-
-        await unlockWindow();
-
-        // 3. Проверяем/настраиваем RustDesk и регистрируем.
-        await registerDevice(config);
-
-        await message(
-          "This device has been successfully connected to support.",
-          {
-            title: "Device registered",
-            kind: "info",
-          },
-        );
-
-        await closeWindow();
-      } catch (err) {
-        const msg = getErrorMessage(err, "Failed to register the device.");
-
-        console.error("Deep link registration failed:", err);
-
-        await message(msg, {
-          title: "Device registration error",
-          kind: "error",
-        });
-      } finally {
-        setProcessing(false);
-      }
+      await requestRegistration({
+        install_token: deepLinkConfig.token,
+        mode: deepLinkConfig.mode,
+      });
 
       return;
     }
@@ -642,9 +783,14 @@ function App() {
   // ============================================================
 
   const handleDeepLinksRef = useRef(handleDeepLinks);
+  const handleInstallerLaunchRef = useRef(handleInstallerLaunch);
+  const checkForUpdatesRef = useRef(checkForUpdates);
+  const installerListenerReady = useRef(Promise.resolve());
 
   useEffect(() => {
     handleDeepLinksRef.current = handleDeepLinks;
+    handleInstallerLaunchRef.current = handleInstallerLaunch;
+    checkForUpdatesRef.current = checkForUpdates;
   });
 
   useEffect(() => {
@@ -690,11 +836,48 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (platform() !== "windows") return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    installerListenerReady.current = listen("installer-launch", async () => {
+      if (disposed) return;
+      try {
+        await handleInstallerLaunchRef.current();
+      } catch {
+        await showWindow();
+        await message(
+          "Cannot process the installer request. Open the Magenda platform to connect this computer.",
+          {
+            title: "Magenda Support",
+            kind: "error",
+          },
+        );
+      }
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     let disposed = false;
 
-    (async () => {
+    void runRegistrationTask(async (isLatest) => {
+      if (disposed) {
+        return;
+      }
+
       try {
+        // Subscribe before consuming the stored request so a second installer
+        // cannot arrive between the initial read and event subscription.
+        await installerListenerReady.current;
+        if (disposed) return;
         const urls = await getCurrent();
+
         if (disposed) {
           return;
         }
@@ -702,173 +885,134 @@ function App() {
         const installUrl =
           urls?.find((url) => getInstallConfigFromUrl(url) !== null) ?? null;
 
-        if (installUrl) {
-          const deepLinkConfig = getInstallConfigFromUrl(installUrl);
+        const installer =
+          platform() === "windows"
+            ? await invoke<InstallerLaunch | null>("get_installer_launch")
+            : null;
+        if (disposed) return;
 
-          if (deepLinkConfig) {
-            const config: InstallConfig = {
-              install_token: deepLinkConfig.token,
-              mode: deepLinkConfig.mode,
-            };
+        // Load the active config for retry/error UI. Manual links do not need
+        // a Downloads import or its macOS permission prompt.
+        await initialize(
+          !!installUrl ||
+            registrationQueue.hasManualRequest ||
+            !!installer?.config ||
+            !!installer?.error,
+        );
 
-            // 1. Сохраняем install.json сразу.
-            await invoke("save_install_config", {
-              token: config.install_token,
-              mode: config.mode,
+        // A live link takes precedence over a delayed startup link/auto request.
+        if (disposed || registrationQueue.hasManualRequest || !isLatest()) {
+          if (installer) {
+            await invoke("clear_installer_launch", {
+              requestId: installer.request_id,
             });
-
-            // 2. Обновляем frontend state.
-            setInstallConfig(config);
-            setMissingInstallToken(false);
-
-            await unlockWindow();
-
-            // 3. Проверяем permissions.
-            await checkPermissions();
-
-            // 4. Регистрируем устройство.
-            // Полный RustDesk health может быть неидеальным,
-            // но если RustDesk установлен и есть ID,
-            // registerDevice продолжит регистрацию.
-            await registerDevice(config);
-
-            await message(
-              "This device has been successfully connected to support.",
-              {
-                title: "Device registered",
-                kind: "info",
-              },
-            );
-
-            await closeWindow();
           }
-        } else {
-          // Обычный запуск приложения без deep link.
-          await initialize(false);
-
-          if (disposed) {
-            return;
-          }
-
-          let rustdeskStatus = await invoke<RustDeskStatus>(
-            "get_rustdesk_status",
-          );
-
-          if (disposed) {
-            return;
-          }
-
-          // На первом GUI-запуске macOS устанавливаем RustDesk.
-          if (platform() === "macos" && !rustdeskStatus.installed) {
-            setProcessing(true);
-
-            try {
-              await invoke("configure_rustdesk");
-
-              if (disposed) {
-                return;
-              }
-
-              rustdeskStatus = await invoke<RustDeskStatus>(
-                "get_rustdesk_status",
-              );
-
-              if (!rustdeskStatus.installed) {
-                throw new Error(
-                  "RustDesk installation did not complete. Please try again.",
-                );
-              }
-            } finally {
-              if (!disposed) {
-                setProcessing(false);
-              }
-            }
-          }
-
-          if (disposed) {
-            return;
-          }
-
-          setStatus(rustdeskStatus);
-          setCurrentRustdeskId(rustdeskStatus.id?.trim() ?? "");
-
-          await checkPermissions();
-
-          if (disposed) {
-            return;
-          }
-
-          // На macOS первый обычный запуск завершает регистрацию.
-          // Читаем актуальный config из Rust, а не React state
-          // из замыкания эффекта.
-          if (platform() === "macos") {
-            const config = await invoke<InstallConfig | null>(
-              "get_install_config",
-            );
-
-            if (disposed) {
-              return;
-            }
-
-            if (config?.install_token?.trim()) {
-              const existing = await invoke<RegistrationData | null>(
-                "get_registration_state",
-              ).catch(() => null);
-
-              if (disposed) {
-                return;
-              }
-
-              if (existing) {
-                setRegistration(existing);
-                setComputerName(existing.computerName);
-                setCurrentRustdeskId(existing.currentRustdeskId);
-
-                // Уже зарегистрировано: оставляем GUI для Rename.
-                return;
-              }
-
-              setProcessing(true);
-
-              try {
-                const result = await invoke<RegistrationData>(
-                  "auto_register_device",
-                );
-
-                if (disposed) {
-                  return;
-                }
-
-                setRegistration(result);
-                setComputerName(result.computerName);
-                setCurrentRustdeskId(result.currentRustdeskId);
-
-                await closeWindow();
-              } finally {
-                if (!disposed) {
-                  setProcessing(false);
-                }
-              }
-            }
-          }
+          return;
         }
-      } catch (err) {
+
+        if (installUrl) {
+          if (installer) {
+            lastInstallerRequest.current = Math.max(
+              lastInstallerRequest.current,
+              installer.request_id,
+            );
+            await invoke("clear_installer_launch", {
+              requestId: installer.request_id,
+            });
+          }
+          if (disposed || registrationQueue.hasManualRequest) return;
+          // Enqueue without awaiting: this startup job must release the queue first.
+          void handleDeepLinksRef.current([installUrl]);
+          return;
+        }
+
+        if (installer) {
+          if (installer.request_id > lastInstallerRequest.current) {
+            lastInstallerRequest.current = installer.request_id;
+            await invoke("clear_installer_launch", {
+              requestId: installer.request_id,
+            });
+            await registerFromInstaller(installer, isLatest);
+          }
+          return;
+        }
+
+        let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
+
+        if (disposed || !isLatest()) {
+          return;
+        }
+
+        // Install or update the bundled RustDesk version before auto-registration.
+        if (
+          platform() === "macos" &&
+          !hasRequiredRustDeskVersion(rustdeskStatus)
+        ) {
+          await invoke("configure_rustdesk");
+
+          if (disposed || !isLatest()) {
+            return;
+          }
+
+          rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
+
+          if (disposed || !isLatest()) {
+            return;
+          }
+
+          assertRequiredRustDeskVersion(rustdeskStatus);
+        }
+
+        if (disposed || !isLatest()) {
+          return;
+        }
+
+        setStatus(rustdeskStatus);
+        setCurrentRustdeskId(rustdeskStatus.id?.trim() ?? "");
+        await checkPermissions();
+
+        if (disposed || !isLatest() || platform() !== "macos") {
+          return;
+        }
+
+        // Rust reads the active config again after taking the registration lock.
+        const config = await invoke<InstallConfig | null>("get_install_config");
+
+        if (disposed || !isLatest() || !config?.install_token?.trim()) {
+          return;
+        }
+
+        const existing = await invoke<RegistrationData | null>(
+          "get_registration_state",
+        ).catch(() => null);
+
+        if (disposed || !isLatest()) {
+          return;
+        }
+
+        const result =
+          existing ?? (await invoke<RegistrationData>("auto_register_device"));
+
         if (disposed) {
           return;
         }
-        console.error("Application startup failed:", err);
 
-        const msg = getErrorMessage(
-          err,
-          "Failed to initialize or register the device.",
+        setRegistration(result);
+        setComputerName(result.computerName);
+        setCurrentRustdeskId(result.currentRustdeskId);
+        // Keep macOS open for RustDesk privacy permissions and Rename.
+      } catch (err) {
+        if (disposed || !isLatest()) {
+          return;
+        }
+
+        if (platform() === "windows") await showWindow();
+        await message(
+          getErrorMessage(err, "Failed to initialize or register the device."),
+          { title: "Magenda Support", kind: "error" },
         );
-
-        await message(msg, {
-          title: "Magenda Support",
-          kind: "error",
-        });
       }
-    })();
+    });
 
     return () => {
       disposed = true;
@@ -881,16 +1025,21 @@ function App() {
 
     getCurrentWindow()
       .onFocusChanged(async ({ payload: focused }) => {
-        if (!focused || disposed) {
+        if (!focused || disposed || registrationQueue.busy) {
           return;
         }
 
+        const version = registrationQueue.version;
         try {
           const saved = await invoke<RegistrationData | null>(
             "get_registration_state",
           );
 
-          if (disposed) {
+          if (
+            disposed ||
+            registrationQueue.busy ||
+            version !== registrationQueue.version
+          ) {
             return;
           }
 
@@ -923,7 +1072,7 @@ function App() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      checkForUpdates();
+      void checkForUpdatesRef.current();
     }, 5000);
 
     return () => clearTimeout(timer);
@@ -950,7 +1099,7 @@ function App() {
             />
 
             <span className="text-sm font-medium text-white">
-              {registration ? "Renaming" : "Registering"} your device...
+              Connecting your device...
             </span>
           </div>
         </div>
@@ -967,7 +1116,7 @@ function App() {
           <div className="text-2xl font-medium text-white">Magenda Support</div>
         </div>
 
-        {missingInstallToken ? (
+        {(missingInstallToken && !pendingConfig) || installerConfigError ? (
           <div className="flex w-full max-w-120 flex-col items-center gap-4 px-8">
             <div className="rounded-xl bg-white/10 p-4 text-center text-white shadow-lg backdrop-blur-sm">
               <div className="mb-2 text-lg leading-none font-semibold">
@@ -975,7 +1124,8 @@ function App() {
               </div>
 
               <div className="text-sm leading-none text-white/90">
-                This computer is not connected to your Magenda account yet.
+                {installerConfigError ||
+                  "This computer is not connected to your Magenda account yet."}
                 <br />
                 <br />
                 Open the Magenda platform and continue the connection process
@@ -1023,7 +1173,14 @@ function App() {
             noValidate
             className="flex w-full max-w-120 flex-col gap-2 px-8"
           >
-            {registration && (
+            {pendingConfig && !processing && (
+              <div className="rounded-xl bg-white/10 p-4 text-center text-sm text-white">
+                Connection not completed. Retry to finish connecting this
+                computer.
+              </div>
+            )}
+
+            {registration && !pendingConfig && (
               <div className="rounded-xl bg-white/10 p-4 text-center text-white shadow-lg backdrop-blur-sm">
                 <div className="text-sm leading-none text-white/90">
                   This device has been successfully connected to support.
@@ -1116,8 +1273,9 @@ function App() {
                 type="button"
                 onClick={handleRegister}
                 disabled={
-                  !installConfig || processing || !computerName.trim() /*||
-                  !currentRustdeskId*/
+                  !(pendingConfig ?? installConfig) ||
+                  processing ||
+                  !computerName.trim()
                 }
                 className="
                       ms-auto
@@ -1141,13 +1299,69 @@ function App() {
                       disabled:opacity-50
                     "
               >
-                {registration ? "Rename" : "Register"} Device
+                {pendingConfig
+                  ? "Retry Connection"
+                  : registration
+                    ? "Rename Device"
+                    : "Register Device"}
               </button>
             </div>
             {/* </>
             )} */}
           </form>
         )}
+
+        {platform() === "macos" &&
+          (status?.installed || installConfig || pendingConfig) && (
+            <div className="flex w-full max-w-120 flex-col gap-3 rounded-xl bg-white/10 p-4 text-white">
+              <div className="text-sm font-semibold">Allow remote assistance</div>
+              <p className="text-sm text-white/90">
+                Open RustDesk, then enable RustDesk in Screen Recording and
+                Accessibility in macOS System Settings. If RustDesk is missing
+                from the list, add it from Applications. Quit and reopen RustDesk
+                after changing these permissions.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  ["Open RustDesk", "open_rustdesk"],
+                  ["Screen Recording", "open_screen_recording_settings"],
+                  ["Accessibility", "open_accessibility_settings"],
+                ].map(([label, command]) => (
+                  <button
+                    key={command}
+                    type="button"
+                    disabled={processing}
+                    onClick={async () => {
+                      try {
+                        await invoke(command);
+                      } catch {
+                        await message(
+                          "Open RustDesk or Privacy & Security from macOS Settings to continue.",
+                          {
+                            title: "Magenda Support",
+                            kind: "error",
+                          },
+                        );
+                      }
+                    }}
+                    className="rounded-md bg-white/15 px-3 py-2 text-sm hover:bg-white/25 disabled:opacity-50"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {registration && !pendingConfig && (
+                <button
+                  type="button"
+                  onClick={closeWindow}
+                  disabled={processing}
+                  className="self-end rounded-md bg-[#67ae6f] px-4 py-2 text-sm disabled:opacity-50"
+                >
+                  Done
+                </button>
+              )}
+            </div>
+          )}
 
         {/* <button
           type="button"

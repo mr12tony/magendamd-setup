@@ -15,7 +15,7 @@ const REGISTRATION_PASSWORD: &str = include_str!(
 );
 
 pub fn run() -> i32 {
-    match register(None) {
+    match register(None, None) {
         Ok(_) => 0,
         Err(code) => code,
     }
@@ -23,19 +23,23 @@ pub fn run() -> i32 {
 
 pub fn register(
     requested_name: Option<String>,
+    requested_config: Option<platform::InstallConfig>,
 ) -> Result<RegistrationData, i32> {
     let _registration_lock = registration_state::lock()?;
 
-    let config = platform::get_install_config()
-        .map_err(|_| 11)?;
-
-    let Some(config) = config else {
-        return Err(10);
+    let explicit_config = requested_config.is_some();
+    // An automatic request reads the active account only after acquiring the lock.
+    // A deep link or installer request uses the candidate supplied with it.
+    let config = match requested_config {
+        Some(config) => config,
+        None => platform::get_install_config().map_err(|_| 11)?.ok_or(10)?,
     };
 
     let token = config.install_token.trim();
 
-    if token.is_empty() {
+    if token.is_empty()
+        || !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(11);
     }
 
@@ -54,7 +58,7 @@ pub fn register(
 
     // Headless: если эта установка уже зарегистрирована,
     // повторный POST не нужен.
-    if requested_name.is_none() {
+    if !explicit_config && requested_name.is_none() {
         if let Some(saved) = saved_registration {
             return Ok(saved);
         }
@@ -127,19 +131,24 @@ pub fn register(
         return Err(31);
     }
 
-    // Config мог измениться через deep link, пока выполнялся POST.
-    // В таком случае не сохраняем старую регистрацию как текущую.
-    let latest_config = platform::get_install_config()
-        .map_err(|_| 41)?
-        .ok_or(41)?;
+    if explicit_config {
+        // Commit the candidate only after the API accepted the upsert.
+        // Keep the lock until both config and registration state are saved.
+        platform::save_install_config(token, config.mode).map_err(|_| 40)?;
+    } else {
+        // Preserve the safeguard against external changes to install.json.
+        let latest_config = platform::get_install_config()
+            .map_err(|_| 41)?
+            .ok_or(41)?;
 
-    let latest_context = registration_state::context_hash(
-        &latest_config,
-        &rustdesk_id,
-    )?;
+        let latest_context = registration_state::context_hash(
+            &latest_config,
+            &rustdesk_id,
+        )?;
 
-    if latest_context != context {
-        return Err(41);
+        if latest_context != context {
+            return Err(41);
+        }
     }
 
     let registration = RegistrationData {

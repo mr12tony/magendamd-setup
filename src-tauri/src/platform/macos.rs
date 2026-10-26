@@ -240,17 +240,23 @@ fn import_install_config_from_directory(
 }
 
 pub fn is_install_json_filename(name: &str) -> bool {
-    if name == "install.json" {
+    let Some(stem) = name.strip_suffix(".json") else {
+        return false;
+    };
+    let Some(suffix) = stem
+        .strip_prefix("install")
+        .or_else(|| stem.strip_prefix("MagendaConfig-user"))
+    else {
+        return false;
+    };
+    if suffix.is_empty() {
         return true;
     }
 
-    let number = name
-        .strip_prefix("install (")
-        .and_then(|value| value.strip_suffix(").json"))
-        .or_else(|| {
-            name.strip_prefix("install-")
-                .and_then(|value| value.strip_suffix(".json"))
-        });
+    let number = suffix
+        .strip_prefix(" (")
+        .and_then(|value| value.strip_suffix(')'))
+        .or_else(|| suffix.strip_prefix('-'));
 
     number.is_some_and(|value| !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit()))
 }

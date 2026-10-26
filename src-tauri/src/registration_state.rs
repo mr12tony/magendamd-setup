@@ -7,7 +7,7 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -61,9 +61,11 @@ pub fn context_hash(
 // Возвращённый File держит блокировку до конца своего scope.
 // Файл registration.lock удалять не нужно.
 pub fn lock() -> Result<File, i32> {
-    let directory = directory()?;
+    lock_in(&directory()?)
+}
 
-    fs::create_dir_all(&directory).map_err(|_| 40)?;
+fn lock_in(directory: &Path) -> Result<File, i32> {
+    fs::create_dir_all(directory).map_err(|_| 40)?;
 
     let file = OpenOptions::new()
         .create(true)
@@ -73,7 +75,9 @@ pub fn lock() -> Result<File, i32> {
         .open(directory.join("registration.lock"))
         .map_err(|_| 40)?;
 
-    fs2::FileExt::try_lock_exclusive(&file).map_err(|_| 42)?;
+    // GUI commands run in spawn_blocking. Wait for headless registration
+    // instead of losing the manual request while another process holds the lock.
+    fs2::FileExt::lock_exclusive(&file).map_err(|_| 42)?;
 
     Ok(file)
 }
@@ -159,4 +163,63 @@ pub fn current() -> Result<Option<RegistrationData>, i32> {
     let context = context_hash(&config, &id)?;
 
     read(&context)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{process::{Command, Stdio}, thread, time::{Duration, Instant}};
+
+    #[test]
+    fn registration_lock_waits_for_another_process() {
+        const CHILD_DIRECTORY: &str = "MAGENDA_REGISTRATION_LOCK_TEST_DIRECTORY";
+
+        // The child runs this same test with an isolated directory, never user data.
+        if let Some(directory) = env::var_os(CHILD_DIRECTORY) {
+            let directory = PathBuf::from(directory);
+            fs::write(directory.join("started"), b"").unwrap();
+            let _lock = lock_in(&directory).expect("wait for the parent's registration");
+            fs::write(directory.join("acquired"), b"").unwrap();
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let held = lock_in(directory.path()).unwrap();
+        let mut child = Command::new(env::current_exe().unwrap())
+            .args(["--exact", "registration_state::tests::registration_lock_waits_for_another_process"])
+            .env(CHILD_DIRECTORY, directory.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let started = directory.path().join("started");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !started.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        thread::sleep(Duration::from_millis(100));
+        let exited_while_locked = child.try_wait().unwrap().is_some();
+        let acquired_while_locked = directory.path().join("acquired").exists();
+        drop(held);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("registration did not resume after the lock was released");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        assert!(started.exists());
+        assert!(!exited_while_locked, "a waiting registration must not fail as busy");
+        assert!(!acquired_while_locked, "registrations must not overlap");
+        assert!(status.success());
+        assert!(directory.path().join("acquired").exists());
+    }
 }

@@ -2,7 +2,7 @@
 # configure-rustdesk.ps1
 #
 # Tauri / NSIS RustDesk deployment
-# Target: RustDesk 1.4.9
+# Target: RustDesk 1.5.0
 #
 # Flow:
 #   1. Detect/install/update RustDesk
@@ -29,7 +29,7 @@ $ErrorActionPreference = "Stop"
 # CONFIGURATION
 # ============================================================
 
-$TargetVersion = "1.4.9"
+$TargetVersion = "1.5.0"
 
 # Self-hosted configuration
 $RustDeskIdServer = "rustdesk.magendamd.com"
@@ -51,11 +51,11 @@ $ServiceTimeoutSeconds = 45
 
 $X64Installer = Join-Path `
     $PSScriptRoot `
-    "rustdesk-1.4.9-x86_64.exe"
+    "rustdesk-1.5.0-x86_64.exe"
 
 $Arm64Installer = Join-Path `
     $PSScriptRoot `
-    "rustdesk-1.4.9-aarch64.exe"
+    "rustdesk-1.5.0-aarch64.exe"
 
 function Remove-RustDeskShortcuts {
 
@@ -153,7 +153,7 @@ function Test-Administrator {
 # ============================================================
 # VERSION
 #
-# 1.4.9+67 -> 1.4.9
+# 1.5.0+67 -> 1.5.0
 # ============================================================
 
 function Normalize-RustDeskVersion {
@@ -1258,7 +1258,7 @@ function Verify-RustDeskToml {
 # ============================================================
 # PASSWORD
 #
-# RustDesk 1.4.9 on tested machine prints:
+# RustDesk 1.5.0 on tested machine prints:
 #
 # Done!
 # ============================================================

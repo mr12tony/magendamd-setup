@@ -50,6 +50,28 @@ mod auto_register;
 
 mod registration_state;
 
+mod installer_launch;
+
+#[tauri::command]
+async fn get_installer_launch(
+    pending: tauri::State<'_, installer_launch::PendingLaunch>,
+) -> Result<Option<installer_launch::InstallerLaunch>, String> {
+    let request = pending.current()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        request.map(|(id, path)| installer_launch::resolve(id, path))
+    })
+        .await
+        .map_err(|_| "Cannot read installation configuration.".to_owned())
+}
+
+#[tauri::command]
+fn clear_installer_launch(
+    pending: tauri::State<'_, installer_launch::PendingLaunch>,
+    request_id: u64,
+) -> Result<(), String> {
+    pending.clear(request_id)
+}
+
 #[tauri::command]
 fn get_install_config() -> Result<Option<platform::InstallConfig>, String> {
     platform::get_install_config()
@@ -263,7 +285,7 @@ fn registration_error(code: i32) -> String {
         31 => "The server rejected device registration.",
         40 => "Cannot read or save registration state.",
         41 => "Installation configuration changed. Please try again.",
-        42 => "Registration is already running. Please try again shortly.",
+        42 => "Cannot acquire the registration lock. Please try again.",
         _ => "Device registration failed.",
     }
     .to_owned()
@@ -282,9 +304,10 @@ async fn get_registration_state(
 
 #[tauri::command]
 async fn auto_register_device(
+    config: Option<platform::InstallConfig>,
 ) -> Result<registration_state::RegistrationData, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        auto_register::register(None)
+    tauri::async_runtime::spawn_blocking(move || {
+        auto_register::register(None, config)
     })
     .await
     .map_err(|_| "Automatic registration failed.".to_owned())?
@@ -294,9 +317,17 @@ async fn auto_register_device(
 #[tauri::command]
 async fn register_device(
     computer_name: String,
+    token: String,
+    mode: platform::InstallMode,
 ) -> Result<registration_state::RegistrationData, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        auto_register::register(Some(computer_name))
+        auto_register::register(
+            Some(computer_name),
+            Some(platform::InstallConfig {
+                install_token: token,
+                mode,
+            }),
+        )
     })
     .await
     .map_err(|_| "Device registration failed.".to_owned())?
@@ -305,19 +336,60 @@ async fn register_device(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let auto_register = std::env::args_os()
-        .skip(1)
-        .any(|arg| arg == "--auto-register");
+    let args: Vec<_> = std::env::args_os().collect();
+    let auto_register = args.iter().any(|arg| arg == "--auto-register");
+    let installer_request = if cfg!(target_os = "windows") {
+        installer_launch::from_args(&args)
+    } else {
+        None
+    };
 
-    if auto_register {
-        std::process::exit(auto_register::run());
+    if auto_register && installer_request.is_none() {
+        let exit_code = auto_register::run();
+
+        if exit_code == 0 || !cfg!(target_os = "windows") {
+            std::process::exit(exit_code);
+        }
+
+        // Preserve the legacy headless command. On Windows a failed registration
+        // opens the GUI for retry; new NSIS launches use the hidden queue below.
+    }
+
+    let mut context = tauri::generate_context!();
+    if installer_request.is_some() {
+        // Run the frontend registration queue without displaying a window.
+        // A failure or a manual deep link makes it visible; success closes it.
+        for window in &mut context.config_mut().app.windows {
+            window.visible = false;
+        }
     }
 
     tauri::Builder::default()
+        .manage(installer_launch::PendingLaunch::new(installer_request))
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_single_instance::init(|_app, argv, _cwd| {
-          // println!("a new app instance was opened with {argv:?} and the deep link event was already triggered");
-          // when defining deep link schemes at runtime, you must also check `argv` here
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // The deep-link feature forwards URLs to the running instance.
+            if cfg!(target_os = "windows")
+                && argv.iter().any(|arg| arg == "--auto-register")
+            {
+                use tauri::{Emitter, Manager};
+
+                let args: Vec<_> = argv.iter().map(std::ffi::OsString::from).collect();
+                if let Some(request) = installer_launch::from_args(&args) {
+                    let pending = app.state::<installer_launch::PendingLaunch>();
+                    let _ = pending.replace(request);
+                    // The stored request covers the interval before the UI subscribes.
+                    let _ = app.emit("installer-launch", ());
+                    return;
+                }
+
+                // A failed NSIS registration may find an existing GUI instance.
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
@@ -344,7 +416,9 @@ pub fn run() {
             get_registration_state,
             register_device,
             auto_register_device,
+            get_installer_launch,
+            clear_installer_launch,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

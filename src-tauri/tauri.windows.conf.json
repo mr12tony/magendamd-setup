@@ -5,8 +5,8 @@
             "nsis"
         ],
         "resources": [
-            "resources/windows/rustdesk-1.4.9-x86_64.exe",
-            "resources/windows/rustdesk-1.4.9-aarch64.exe",
+            "resources/windows/rustdesk-1.5.0-x86_64.exe",
+            "resources/windows/rustdesk-1.5.0-aarch64.exe",
             "resources/windows/configure-rustdesk.ps1"
         ],
         "windows": {

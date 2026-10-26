@@ -5,7 +5,7 @@ set -euo pipefail
 # ============================================================
 # MagendaSupport / RustDesk deployment for macOS
 #
-# Target: RustDesk 1.4.9
+# Target: RustDesk 1.5.0
 #
 # Flow:
 #   1. Require root
@@ -30,7 +30,7 @@ set -euo pipefail
 # CONFIG
 # ============================================================
 
-TARGET_VERSION="1.4.9"
+TARGET_VERSION="1.5.0"
 
 RUSTDESK_ID_SERVER="rustdesk.magendamd.com"
 RUSTDESK_RELAY_SERVER="rustdesk.magendamd.com"

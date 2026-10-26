@@ -45,6 +45,10 @@ fn accepts_supported_browser_filenames_only() {
         "install (1).json",
         "install (001).json",
         "install-2.json",
+        "MagendaConfig-user.json",
+        "MagendaConfig-user (1).json",
+        "MagendaConfig-user (001).json",
+        "MagendaConfig-user-2.json",
     ] {
         assert!(is_install_json_filename(name), "{name}");
     }
@@ -58,6 +62,14 @@ fn accepts_supported_browser_filenames_only() {
         "INSTALL.JSON",
         "install.json.txt",
         "install (1).json.crdownload",
+        "MagendaConfig-user-backup.json",
+        "MagendaConfig-user ().json",
+        "MagendaConfig-user-.json",
+        "MagendaConfig-user (a).json",
+        "MagendaConfig-user (１).json",
+        "MagendaConfig-user--1.json",
+        "MagendaConfig-user.json.txt",
+        "MagendaConfig-user (1).json.crdownload",
     ] {
         assert!(!is_install_json_filename(name), "{name}");
     }
@@ -80,19 +92,49 @@ fn imports_newest_by_modification_time_and_normalizes_token() {
 }
 
 #[test]
-fn rejects_invalid_newest_without_saving_or_using_an_older_token() {
-    for invalid in [
-        b"{incomplete".as_slice(),
-        br#"{"install_token":"  ","mode":"prod"}"#,
-        br#"{"install_token":"BAD\nTOKEN","mode":"prod"}"#,
-        br#"{"install_token":"TOKEN","mode":"unknown"}"#,
+fn new_and_legacy_downloads_share_modification_time_priority() {
+    for name in [
+        "MagendaConfig-user.json",
+        "MagendaConfig-user (1).json",
+        "MagendaConfig-user-2.json",
     ] {
-        let files = ConfigFiles::new();
-        files.download("install.json", VALID, 1000);
-        files.download("install (1).json", invalid, 2000);
-        let error = files.import().unwrap_err();
-        assert!(error.contains("install (1).json"));
-        assert!(!files.destination.exists());
+        for (older, newer) in [("install.json", name), (name, "install-1.json")] {
+            let files = ConfigFiles::new();
+            files.download(older, VALID, 1000);
+            files.download(
+                newer,
+                br#"{"install_token":"NEW_TOKEN","mode":"dev"}"#,
+                2000,
+            );
+            assert!(files.import().unwrap());
+            let config = read_install_config(&files.destination).unwrap().unwrap();
+            assert_eq!(config.install_token, "NEW_TOKEN", "{older} -> {newer}");
+            assert!(matches!(config.mode, InstallMode::Dev));
+            assert!(files.downloads.join(newer).is_file());
+        }
+    }
+}
+
+#[test]
+fn rejects_invalid_newest_without_saving_or_using_an_older_token() {
+    for (older, newer) in [
+        ("install.json", "install (1).json"),
+        ("install.json", "MagendaConfig-user (1).json"),
+        ("MagendaConfig-user.json", "install (1).json"),
+    ] {
+        for invalid in [
+            b"{incomplete".as_slice(),
+            br#"{"install_token":"  ","mode":"prod"}"#,
+            br#"{"install_token":"BAD\nTOKEN","mode":"prod"}"#,
+            br#"{"install_token":"TOKEN","mode":"unknown"}"#,
+        ] {
+            let files = ConfigFiles::new();
+            files.download(older, VALID, 1000);
+            files.download(newer, invalid, 2000);
+            let error = files.import().unwrap_err();
+            assert!(error.contains(newer));
+            assert!(!files.destination.exists());
+        }
     }
 }
 

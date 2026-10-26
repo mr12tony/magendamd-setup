@@ -40,6 +40,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fs2 = "0.4"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-single-instance = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-updater = "2"
 
