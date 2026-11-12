@@ -181,6 +181,13 @@ function app(options = {}) {
       case "clear_installer_launch":
         if (installer?.request_id === args.requestId) installer = null;
         return;
+      case "reset_installation_state":
+        await options.reset?.();
+        activeConfig = null;
+        saved = null;
+        return;
+      case "read_downloaded_install_config":
+        return options.download ? options.download() : null;
       case "initialize_install_config":
       case "get_install_config":
         return activeConfig;
@@ -368,9 +375,153 @@ test("macOS keeps the required RustDesk version without running setup again", as
       false,
     );
     assert.equal(autoCalls(state).length, 0);
+    assert.equal(state.calls.some((call) => call.command === "reset_installation_state"), false);
+    assert.equal(state.calls.some((call) => call.command === "read_downloaded_install_config"), false);
     assert.ok(state.button("Done"));
   }
 });
+
+test("macOS reconnect clears the old account before discovery and saves only after API success", async () => {
+  const api = deferred();
+  const state = app({
+    config: config("OLD"),
+    saved: registered("Old name"),
+    download: () => config("NEW", "dev"),
+    register: () => api.promise,
+  });
+  await state.idle();
+  const reconnect = state.button("Reconnect Device").props.onClick();
+  await until(() => manualCalls(state).length === 1);
+  const commands = state.calls.map((call) => call.command);
+  assert.ok(commands.indexOf("reset_installation_state") < commands.indexOf("read_downloaded_install_config"));
+  assert.ok(commands.indexOf("read_downloaded_install_config") < commands.indexOf("register_device"));
+  assert.equal(state.activeConfig, null);
+  assert.equal(state.text.includes("successfully connected"), false);
+  assert.equal(manualCalls(state)[0].args.computerName, "Test computer");
+  api.resolve();
+  await reconnect;
+  await state.idle();
+  assert.deepEqual(state.activeConfig, config("NEW", "dev"));
+  assert.ok(state.button("Done"));
+  assert.equal(state.closes, 0);
+});
+
+test("macOS reconnect sends an upsert even when the downloaded token has not changed", async () => {
+  const state = app({
+    config: config("SAME"),
+    saved: registered(),
+    download: () => config("SAME"),
+  });
+  await state.idle();
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  assert.equal(manualCalls(state).length, 1);
+  assert.equal(manualCalls(state)[0].args.token, "SAME");
+  assert.equal(autoCalls(state).length, 0);
+});
+
+test("a failed macOS reconnect keeps old data cleared and Retry uses only the candidate", async () => {
+  let reject = true;
+  const state = app({
+    config: config("OLD"),
+    saved: registered(),
+    download: () => config("NEW", "local"),
+    register: () => {
+      if (reject) throw "Cannot connect to the registration server.";
+    },
+  });
+  await state.idle();
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  assert.equal(state.activeConfig, null);
+  assert.equal(state.button("Done"), undefined);
+  assert.equal(state.button("Retry Connection").props.disabled, false);
+  reject = false;
+  await state.button("Retry Connection").props.onClick();
+  await state.idle();
+  assert.deepEqual(manualCalls(state).map((call) => call.args.token), ["NEW", "NEW"]);
+  assert.equal(state.calls.filter((call) => call.command === "read_downloaded_install_config").length, 1);
+  assert.deepEqual(state.activeConfig, config("NEW", "local"));
+});
+
+for (const scenario of ["missing", "invalid", "denied"]) {
+  test(`macOS reconnect recovers from a ${scenario} download in the same session`, async () => {
+    let ready = false;
+    const state = app({
+      config: config("OLD"),
+      saved: registered(),
+      download: () => {
+        if (ready) return config("NEW");
+        if (scenario === "missing") return null;
+        throw scenario === "invalid" ? "Invalid install config" : "Downloads access denied";
+      },
+    });
+    await state.idle();
+    await state.button("Reconnect Device").props.onClick();
+    await state.idle();
+    assert.equal(state.activeConfig, null);
+    assert.equal(manualCalls(state).length, 0);
+    assert.equal(autoCalls(state).length, 0);
+    assert.ok(state.button("Open Magenda Platform"));
+    assert.equal(state.button("Retry Connection"), undefined);
+    ready = true;
+    await state.button("Reconnect Device").props.onClick();
+    await state.idle();
+    assert.equal(state.calls.filter((call) => call.command === "read_downloaded_install_config").length, 2);
+    assert.deepEqual(state.activeConfig, config("NEW"));
+  });
+}
+
+test("macOS reconnect stops on cleanup failure and allows a later clean retry", async () => {
+  let fail = true;
+  const state = app({
+    config: config("OLD"),
+    saved: registered(),
+    reset: () => {
+      if (fail) throw "Cannot clear the previous installation data.";
+    },
+    download: () => config("NEW"),
+  });
+  await state.idle();
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  assert.equal(state.calls.some((call) => call.command === "read_downloaded_install_config"), false);
+  assert.equal(manualCalls(state).length, 0);
+  assert.ok(state.button("Open Magenda Platform"));
+  assert.equal(state.button("Rename Device"), undefined);
+  fail = false;
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  assert.deepEqual(state.activeConfig, config("NEW"));
+});
+
+for (const stage of ["reset", "download", "register"]) {
+  test(`a platform link takes precedence during macOS reconnect ${stage}`, async () => {
+    const blocked = deferred();
+    let waiting = false;
+    const state = app({
+      config: config("OLD"),
+      saved: registered(),
+      [stage]: () => {
+        waiting = true;
+        return blocked.promise;
+      },
+      ...(stage !== "download" ? { download: () => config("DOWNLOAD") } : {}),
+    });
+    await state.idle();
+    const reconnect = state.button("Reconnect Device").props.onClick();
+    await until(() => waiting);
+    const manual = state.links(link("LINK", "dev"));
+    blocked.resolve(config("DOWNLOAD"));
+    await Promise.all([reconnect, manual]);
+    await state.idle();
+    assert.deepEqual(manualCalls(state).map((call) => call.args.token),
+      stage === "register" ? ["DOWNLOAD", "LINK"] : ["LINK"]);
+    assert.deepEqual(state.activeConfig, config("LINK", "dev"));
+    assert.equal(state.dialogs.length, 1);
+    assert.ok(state.button("Done"));
+  });
+}
 
 test("a cancelled macOS setup stops registration and can be retried from the app", async () => {
   let cancelled = true;
@@ -606,7 +757,7 @@ test("an idle configured app can still accept an update", async () => {
   );
 });
 
-test("personalized installer registers quietly and commits its candidate only on success", async () => {
+test("personalized reinstall clears the old account before POST and saves the candidate only on success", async () => {
   const api = deferred();
   const state = app({
     platform: "windows",
@@ -617,8 +768,11 @@ test("personalized installer registers quietly and commits its candidate only on
     auto: () => api.promise,
   });
   await until(() => autoCalls(state).length === 1);
-  assert.deepEqual(state.activeConfig, config("OLD"));
+  assert.equal(state.activeConfig, null);
+  const commands = state.calls.map((call) => call.command);
+  assert.ok(commands.indexOf("reset_installation_state") < commands.indexOf("auto_register_device"));
   assert.deepEqual(autoCalls(state)[0].args.config, config("EXE", "dev"));
+  assert.equal(autoCalls(state)[0].args.force, true);
   assert.equal(state.visible, false);
   api.resolve();
   await state.idle();
@@ -661,6 +815,7 @@ test("invalid installer data opens the platform flow without registering an old 
   });
   await state.idle();
   assert.equal(state.visible, true);
+  assert.equal(state.activeConfig, null);
   assert.equal(autoCalls(state).length, 0);
   assert.ok(state.button("Open Magenda Platform"));
   assert.equal(state.button("Rename Device"), undefined);
@@ -728,21 +883,98 @@ test("an installer arriving while a manual request runs cannot supersede that re
   api.resolve();
   await manual;
   assert.equal(autoCalls(state).length, 0);
+  assert.equal(state.calls.some((call) => call.command === "reset_installation_state"), false);
   assert.deepEqual(state.activeConfig, config("MANUAL"));
   assert.equal(state.closes, 1);
 });
 
-test("ordinary installer without a companion uses the saved config lookup", async () => {
+test("ordinary reinstall with no new token clears old state and asks for a platform connection", async () => {
   const state = app({
     platform: "windows",
     visible: false,
     config: config("SAVED"),
+    saved: registered(),
     installer: installerLaunch(null),
   });
   await state.idle();
-  assert.equal(autoCalls(state)[0].args.config, null);
+  assert.equal(state.activeConfig, null);
+  assert.equal(autoCalls(state).length, 0);
+  assert.equal(state.closes, 0);
+  assert.equal(state.visible, true);
+  assert.ok(state.button("Open Magenda Platform"));
+  assert.equal(state.button("Rename Device"), undefined);
+  await state.focus();
+  assert.equal(state.text.includes("successfully connected"), false);
+  await state.links(link("NEW", "dev"));
+  assert.deepEqual(state.activeConfig, config("NEW", "dev"));
+});
+
+test("failed reinstall retains only the new candidate for Retry", async () => {
+  const state = app({
+    platform: "windows",
+    visible: false,
+    config: config("SAVED", "dev"),
+    saved: registered(),
+    installer: installerLaunch("NEW", "dev"),
+    auto: () => {
+      throw new Error("Offline");
+    },
+  });
+  await state.idle();
+  assert.equal(state.visible, true);
+  assert.equal(state.closes, 0);
+  assert.equal(state.activeConfig, null);
+  assert.equal(state.button("Rename Device"), undefined);
+  assert.equal(state.text.includes("successfully connected"), false);
+  assert.equal(state.button("Retry Connection").props.disabled, false);
+  await state.focus();
+  assert.equal(state.text.includes("successfully connected"), false);
+  await state.button("Retry Connection").props.onClick();
+  assert.equal(manualCalls(state)[0].args.token, "NEW");
+  assert.equal(manualCalls(state)[0].args.mode, "dev");
+  assert.equal(state.closes, 1);
+});
+
+test("an ordinary installer forwarded to a running app clears its old account too", async () => {
+  const state = app({
+    platform: "windows",
+    config: config("SAVED"),
+    saved: registered(),
+  });
+  await state.idle();
+  assert.equal(autoCalls(state).length, 0);
+  await state.installer(installerLaunch(null, "prod", 2));
+  await state.idle();
+  assert.equal(autoCalls(state).length, 0);
+  assert.equal(state.activeConfig, null);
+  assert.ok(state.button("Open Magenda Platform"));
+  assert.equal(state.closes, 0);
+});
+
+test("a reset failure blocks installer registration and retry with the old account", async () => {
+  const state = app({
+    platform: "windows",
+    visible: false,
+    config: config("OLD"),
+    saved: registered(),
+    installer: installerLaunch("NEW"),
+    reset: () => { throw new Error("Cannot clear the previous installation data"); },
+  });
+  await state.idle();
+  assert.equal(state.visible, true);
+  assert.equal(autoCalls(state).length, 0);
+  assert.equal(state.closes, 0);
+  assert.equal(state.button("Rename Device"), undefined);
+  assert.equal(state.button("Retry Connection"), undefined);
+  assert.ok(state.text.includes("Cannot clear the previous installation data"));
+});
+
+test("normal Windows startup preserves saved registration without resetting it", async () => {
+  const state = app({ platform: "windows", config: config("SAVED"), saved: registered() });
+  await state.idle();
+  assert.equal(state.calls.some((call) => call.command === "reset_installation_state"), false);
   assert.deepEqual(state.activeConfig, config("SAVED"));
-  assert.equal(state.shows, 0);
+  assert.ok(state.button("Rename Device"));
 });
 
 test("startup and a live notification for the same installer do not register twice", async () => {

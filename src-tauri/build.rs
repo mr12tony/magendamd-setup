@@ -1,8 +1,74 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
     prepare_registration_password();
+    prepare_windows_uninstaller();
     tauri_build::build();
+}
+
+fn prepare_windows_uninstaller() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    for path in [
+        "windows/uninstall-helper/Cargo.toml",
+        "windows/uninstall-helper/Cargo.lock",
+        "windows/uninstall-helper/src",
+        "src/registration_files.rs",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+
+    let target = env::var("TARGET").expect("TARGET is missing");
+    let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is missing"));
+    // A separate target directory avoids recursively waiting for Cargo's parent
+    // build lock. The helper has its own small, locked dependency graph.
+    let helper_target = out.join("uninstall-helper");
+    let mut command = Command::new(env::var_os("CARGO").expect("CARGO is missing"));
+    command
+        .args([
+            "build",
+            "--locked",
+            "--release",
+            "--manifest-path",
+            "windows/uninstall-helper/Cargo.toml",
+            "--jobs",
+            "1",
+            "--target",
+            &target,
+            "--target-dir",
+        ])
+        .arg(&helper_target)
+        .env_remove("CARGO_MAKEFLAGS")
+        .env_remove("MAKEFLAGS")
+        .env_remove("MFLAGS");
+    if target.ends_with("-msvc") {
+        // The uninstaller must not require a separately installed VC++ runtime.
+        let mut flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+        if !flags.is_empty() {
+            flags.push('\u{1f}');
+        }
+        flags.push_str("-Ctarget-feature=+crt-static");
+        command.env("CARGO_ENCODED_RUSTFLAGS", flags);
+    }
+    let status = command
+        .status()
+        .expect("Cannot build the Windows uninstall helper");
+    assert!(status.success(), "Windows uninstall helper build failed");
+
+    // Tauri uses this same OUT_DIR ancestry to find the main binary's directory,
+    // including --target, custom target directories and debug/release profiles.
+    let binary_directory = out
+        .ancestors()
+        .nth(3)
+        .expect("Cargo output directory is invalid");
+    fs::copy(
+        helper_target
+            .join(&target)
+            .join("release/magenda-uninstall-cleanup.exe"),
+        binary_directory.join("magenda-uninstall-cleanup.exe"),
+    )
+    .expect("Cannot prepare the embedded Windows uninstall helper");
 }
 
 fn prepare_registration_password() {

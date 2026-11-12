@@ -27,6 +27,19 @@ $Dlib = `
 $Metadata = `
     "C:\MagendaSigning\metadata.json"
 
+# CI prepares these tools in its temporary directory. Keep local defaults.
+if ($env:MAGENDA_SIGNTOOL_PATH) {
+    $SignTool = $env:MAGENDA_SIGNTOOL_PATH
+}
+if ($env:MAGENDA_SIGNING_DLIB_PATH) {
+    $Dlib = $env:MAGENDA_SIGNING_DLIB_PATH
+}
+if ($env:MAGENDA_SIGNING_METADATA_PATH) {
+    $Metadata = $env:MAGENDA_SIGNING_METADATA_PATH
+}
+
+$IsCiBuild = $env:CI -eq "true" -or $env:GITHUB_ACTIONS -eq "true"
+
 $AzureCliDir = `
     "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin"
 
@@ -34,6 +47,11 @@ $AzureCli = Join-Path `
     $AzureCliDir `
     "az.cmd"
 
+$AvailableAzureCli = Get-Command az.cmd -ErrorAction SilentlyContinue
+if ($AvailableAzureCli) {
+    $AzureCli = $AvailableAzureCli.Source
+    $AzureCliDir = Split-Path -Parent $AzureCli
+}
 
 # ------------------------------------------------------------
 # Check files
@@ -55,8 +73,13 @@ if (-not (Test-Path -LiteralPath $Metadata)) {
     throw "Artifact Signing metadata not found: $Metadata"
 }
 
-if (-not (Test-Path -LiteralPath $KeyPath)) {
-    throw "Updater private key not found: $KeyPath"
+if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+    if ($IsCiBuild) {
+        throw "Set the TAURI_SIGNING_PRIVATE_KEY GitHub Actions secret."
+    }
+    if (-not (Test-Path -LiteralPath $KeyPath)) {
+        throw "Updater private key not found: $KeyPath"
+    }
 }
 
 if (-not (Test-Path -LiteralPath $AzureCli)) {
@@ -109,7 +132,7 @@ Write-Host ""
 & $AzureCli account show *> $null
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Azure CLI is not logged in. Run: az login"
+    throw "Azure CLI is not logged in. Use azure/login in GitHub Actions or run az login locally."
 }
 
 Write-Host "Azure login OK."
@@ -185,31 +208,23 @@ if (Test-Path -LiteralPath $SigPath) {
 # Read Tauri updater password
 # ------------------------------------------------------------
 
-$Password = Read-Host `
-    "Enter updater private key password" `
-    -AsSecureString
-
-$PasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(
-    $Password
-)
+$PasswordPtr = [IntPtr]::Zero
 
 try {
+    if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+        $PrivateKey = Get-Content -LiteralPath $KeyPath -Raw
+        if ([string]::IsNullOrWhiteSpace($PrivateKey)) {
+            throw "Updater private key is empty."
+        }
 
-    $PlainPassword =
-        [Runtime.InteropServices.Marshal]::PtrToStringBSTR(
+        $Password = Read-Host "Enter updater private key password" -AsSecureString
+        $PasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
+        $PlainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR(
             $PasswordPtr
         )
-
-    $PrivateKey = Get-Content `
-        -LiteralPath $KeyPath `
-        -Raw
-
-    if ([string]::IsNullOrWhiteSpace($PrivateKey)) {
-        throw "Updater private key is empty."
+        $env:TAURI_SIGNING_PRIVATE_KEY = $PrivateKey
+        $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $PlainPassword
     }
-
-    $env:TAURI_SIGNING_PRIVATE_KEY = $PrivateKey
-    $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $PlainPassword
 
 
     # --------------------------------------------------------
@@ -222,7 +237,7 @@ try {
     Write-Host "Creating new Tauri updater signature..."
     Write-Host ""
 
-    npm run tauri signer sign -- $InstallerPath
+    npm run tauri -- signer sign $InstallerPath
 
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri updater signing failed with exit code $LASTEXITCODE"

@@ -8,7 +8,7 @@ use std::{
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
     process::Command,
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use tauri::Manager;
@@ -52,6 +52,12 @@ fn install_config_path() -> Result<PathBuf, String> {
 // Cache successes, missing files and errors so startup cannot repeatedly scan Downloads.
 static DOWNLOADS_IMPORT: OnceLock<Result<bool, String>> = OnceLock::new();
 static INSTALL_CONFIG_WRITE: Mutex<()> = Mutex::new(());
+
+pub(crate) fn lock_install_config_write() -> Result<MutexGuard<'static, ()>, String> {
+    INSTALL_CONFIG_WRITE
+        .lock()
+        .map_err(|_| "Install config write lock is unavailable.".to_string())
+}
 
 pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
     read_install_config(&install_config_path()?)
@@ -137,17 +143,26 @@ fn write_install_config(path: &Path, config: &InstallConfig) -> Result<(), Strin
 pub fn save_install_config(token: &str, mode: InstallMode) -> Result<(), String> {
     let config = validate_install_config(token, mode)?;
     let path = install_config_path()?;
-    let _guard = INSTALL_CONFIG_WRITE
-        .lock()
-        .map_err(|_| "Install config write lock is unavailable.".to_string())?;
+    let _guard = lock_install_config_write()?;
 
     write_install_config(&path, &config)
 }
 
 pub fn import_install_config_from_downloads() -> Result<bool, String> {
+    // Keep startup imports in the same order as registration and reset:
+    // registration.lock first, then INSTALL_CONFIG_WRITE.
+    let _registration_lock = crate::registration_state::lock()
+        .map_err(|_| "Cannot acquire the registration lock. Please try again.".to_string())?;
     let home = env::var("HOME").map_err(|_| "HOME environment variable not found".to_string())?;
     let downloads = PathBuf::from(home).join("Downloads");
     import_install_config_once(&DOWNLOADS_IMPORT, &downloads, &install_config_path()?)
+}
+
+pub fn read_downloaded_install_config() -> Result<Option<InstallConfig>, String> {
+    let home = env::var("HOME").map_err(|_| "HOME environment variable not found".to_string())?;
+    // Reconnection deliberately bypasses the startup cache and saved config.
+    // The candidate is committed by registration only after API success.
+    read_install_config_from_directory(&PathBuf::from(home).join("Downloads"))
 }
 
 fn import_install_config_once(
@@ -173,9 +188,24 @@ fn import_install_config_from_directory(
         return Ok(false);
     }
 
+    let Some(config) = read_install_config_from_directory(downloads)? else {
+        return Ok(false);
+    };
+
+    // A deep link may have saved a config while Downloads access was being granted.
+    let _guard = lock_install_config_write()?;
+    if has_valid_install_config(destination)? {
+        return Ok(false);
+    }
+
+    write_install_config(destination, &config)?;
+    Ok(true)
+}
+
+fn read_install_config_from_directory(downloads: &Path) -> Result<Option<InstallConfig>, String> {
     let entries = match fs::read_dir(downloads) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             return Err(format!(
                 "Cannot read Downloads directory {}: {err}. Check MagendaSupport's Downloads access in macOS System Settings > Privacy & Security > Files and Folders.",
@@ -216,7 +246,7 @@ fn import_install_config_from_directory(
     // Choose by modification time, with a deterministic tie-breaker.
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let Some((source, _)) = candidates.first() else {
-        return Ok(false);
+        return Ok(None);
     };
 
     // Do not silently fall back to an older token if the newest download is invalid.
@@ -227,16 +257,7 @@ fn import_install_config_from_directory(
         )
     })?;
 
-    // A deep link may have saved a config while Downloads access was being granted.
-    let _guard = INSTALL_CONFIG_WRITE
-        .lock()
-        .map_err(|_| "Install config write lock is unavailable.".to_string())?;
-    if has_valid_install_config(destination)? {
-        return Ok(false);
-    }
-
-    write_install_config(destination, &config)?;
-    Ok(true)
+    Ok(Some(config))
 }
 
 pub fn is_install_json_filename(name: &str) -> bool {

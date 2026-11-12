@@ -7,9 +7,10 @@ use std::{
 };
 
 pub(super) fn get_id(
-    executable: &str,
+    executable: impl AsRef<Path>,
 ) -> Result<Option<String>, String> {
-    if !Path::new(executable).is_file() {
+    let executable = executable.as_ref();
+    if !executable.is_file() {
         return Ok(None);
     }
 

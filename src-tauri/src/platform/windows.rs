@@ -1,5 +1,6 @@
 use super::RustDeskPermissionsStatus;
 use super::RustDeskStatus;
+use super::windows_rustdesk::find_rustdesk_exe;
 
 use serde::{Deserialize, Serialize};
 
@@ -8,8 +9,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-
-const RUSTDESK_EXE: &str = r"C:\Program Files\RustDesk\rustdesk.exe";
 
 const ID_SERVER: &str = "rustdesk.magendamd.com";
 const RELAY_SERVER: &str = "rustdesk.magendamd.com";
@@ -163,11 +162,15 @@ pub fn save_install_config(
 }
 
 pub fn get_rustdesk_id() -> Result<Option<String>, String> {
-    if !Path::new(RUSTDESK_EXE).exists() {
+    let Some(executable) = find_rustdesk_exe() else {
         return Ok(None);
-    }
+    };
 
-    let output = Command::new(RUSTDESK_EXE)
+    get_rustdesk_id_from(&executable)
+}
+
+fn get_rustdesk_id_from(executable: &Path) -> Result<Option<String>, String> {
+    let output = Command::new(executable)
         .arg("--get-id")
         .output()
         .map_err(|e| format!("Failed to run RustDesk: {e}"))?;
@@ -209,10 +212,10 @@ pub fn open_input_monitoring_settings() -> Result<(), String> {
     Ok(())
 }
 
-fn get_rustdesk_version() -> Option<String> {
+fn get_rustdesk_version(executable: &Path) -> Option<String> {
     let script = format!(
-        "(Get-Item '{}').VersionInfo.ProductVersion",
-        RUSTDESK_EXE.replace('\'', "''")
+        "(Get-Item -LiteralPath '{}').VersionInfo.ProductVersion",
+        executable.to_string_lossy().replace('\'', "''")
     );
 
     let output = Command::new("powershell.exe")
@@ -275,9 +278,7 @@ fn is_rustdesk_configured() -> bool {
 }
 
 pub fn get_rustdesk_status() -> Result<RustDeskStatus, String> {
-    let installed = Path::new(RUSTDESK_EXE).exists();
-
-    if !installed {
+    let Some(executable) = find_rustdesk_exe() else {
         return Ok(RustDeskStatus {
             installed: false,
             version: None,
@@ -285,12 +286,12 @@ pub fn get_rustdesk_status() -> Result<RustDeskStatus, String> {
             configured: false,
             id: None,
         });
-    }
+    };
 
-    let version = get_rustdesk_version();
+    let version = get_rustdesk_version(&executable);
     let service_running = is_rustdesk_service_running();
     let configured = is_rustdesk_configured();
-    let id = get_rustdesk_id()?;
+    let id = get_rustdesk_id_from(&executable)?;
 
     Ok(RustDeskStatus {
         installed: true,
@@ -302,11 +303,10 @@ pub fn get_rustdesk_status() -> Result<RustDeskStatus, String> {
 }
 
 pub fn open_rustdesk() -> Result<(), String> {
-    if !Path::new(RUSTDESK_EXE).exists() {
-        return Err("RustDesk is not installed.".to_string());
-    }
+    let executable = find_rustdesk_exe()
+        .ok_or_else(|| "RustDesk is not installed.".to_owned())?;
 
-    Command::new(RUSTDESK_EXE)
+    Command::new(executable)
         .spawn()
         .map_err(|e| format!("Failed to open RustDesk: {e}"))?;
 
@@ -314,5 +314,8 @@ pub fn open_rustdesk() -> Result<(), String> {
 }
 
 pub fn get_rustdesk_id_headless() -> Result<Option<String>, String> {
-    super::headless::get_id(RUSTDESK_EXE)
+    let Some(executable) = find_rustdesk_exe() else {
+        return Ok(None);
+    };
+    super::headless::get_id(executable)
 }

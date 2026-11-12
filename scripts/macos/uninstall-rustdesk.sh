@@ -19,19 +19,25 @@ echo "Home: $USER_HOME"
 echo ""
 
 # ========================================
-# REMOVE MAGENDA SUPPORT INSTALL TOKEN
+# REMOVE MAGENDA SUPPORT CONNECTION STATE
 # ========================================
 
-echo "Removing MagendaSupport install token..."
-
-INSTALL_JSON="$USER_HOME/Library/Application Support/MagendaSupport/install.json"
-
-if [ -f "$INSTALL_JSON" ]; then
-  rm -f "$INSTALL_JSON"
-  echo "OK: MagendaSupport install.json removed"
-else
-  echo "OK: MagendaSupport install.json does not exist"
+if pgrep -u "$CURRENT_USER" -f '/MagendaSupport\.app/Contents/MacOS/' >/dev/null 2>&1; then
+  echo "ERROR: Close MagendaSupport before cleanup so it cannot recreate the connection data."
+  exit 1
 fi
+
+echo "Removing MagendaSupport install token and registration..."
+
+SUPPORT_DIRECTORY="$USER_HOME/Library/Application Support/MagendaSupport"
+# Keep registration.lock and unrelated files; never remove the directory recursively.
+for STATE_FILE in install.json registration.json; do
+  if ! rm -f "$SUPPORT_DIRECTORY/$STATE_FILE"; then
+    echo "ERROR: Cannot remove MagendaSupport $STATE_FILE"
+    exit 1
+  fi
+  echo "OK: MagendaSupport $STATE_FILE is absent"
+done
 
 # ========================================
 # 1. CLOSE RUSTDESK

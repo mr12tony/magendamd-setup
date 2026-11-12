@@ -146,7 +146,7 @@ function App() {
   const [pendingConfig, setPendingConfig] = useState<InstallConfig | null>(
     null,
   );
-  const [installerConfigError, setInstallerConfigError] = useState<
+  const [connectionError, setConnectionError] = useState<
     string | null
   >(null);
   const registrationQueue = useRef(new RegistrationQueue()).current;
@@ -217,7 +217,7 @@ function App() {
   }
 
   async function checkForUpdates() {
-    if (registrationQueue.busy || pendingConfig || installerConfigError) {
+    if (registrationQueue.busy || pendingConfig || connectionError) {
       return;
     }
 
@@ -419,12 +419,12 @@ function App() {
   // REGISTER DEVICE
   // ============================================================
 
-  async function registerDevice(config: InstallConfig) {
+  async function registerDevice(config: InstallConfig, requestedName?: string) {
     if (!config.install_token.trim()) {
       throw new Error("Installation token is missing.");
     }
 
-    const name = await ensureComputerName();
+    const name = requestedName ?? await ensureComputerName();
 
     let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
 
@@ -475,45 +475,54 @@ function App() {
 
   async function requestRegistration(config: InstallConfig) {
     setPendingConfig(config);
-    setInstallerConfigError(null);
+    setConnectionError(null);
 
-    await runRegistrationTask(async (isLatest) => {
-      try {
-        if (platform() === "windows") {
-          await showWindow();
-        } else {
-          await unlockWindow();
-        }
-        await registerDevice(config);
+    await runRegistrationTask(
+      (isLatest) => completeRegistration(config, isLatest),
+      true,
+    );
+  }
 
-        if (!isLatest()) {
-          return;
-        }
-
-        setPendingConfig(null);
-        await message(
-          "This device has been successfully connected to support.",
-          {
-            title: "Device registered",
-            kind: "info",
-          },
-        );
-
-        // Another link may arrive while the success dialog is open.
-        if (isLatest() && platform() !== "macos") {
-          await closeWindow();
-        }
-      } catch (err) {
-        if (!isLatest()) {
-          return;
-        }
-
-        await message(getErrorMessage(err, "Failed to register the device."), {
-          title: "Device registration error",
-          kind: "error",
-        });
+  async function completeRegistration(
+    config: InstallConfig,
+    isLatest: () => boolean,
+    requestedName?: string,
+  ) {
+    try {
+      if (platform() === "windows") {
+        await showWindow();
+      } else {
+        await unlockWindow();
       }
-    }, true);
+      await registerDevice(config, requestedName);
+
+      if (!isLatest()) {
+        return;
+      }
+
+      setPendingConfig(null);
+      await message(
+        "This device has been successfully connected to support.",
+        {
+          title: "Device registered",
+          kind: "info",
+        },
+      );
+
+      // Another link may arrive while the success dialog is open.
+      if (isLatest() && platform() !== "macos") {
+        await closeWindow();
+      }
+    } catch (err) {
+      if (!isLatest()) {
+        return;
+      }
+
+      await message(getErrorMessage(err, "Failed to register the device."), {
+        title: "Device registration error",
+        kind: "error",
+      });
+    }
   }
 
   async function handleRegister() {
@@ -526,22 +535,98 @@ function App() {
     await requestRegistration(config);
   }
 
+  function clearConnectionState() {
+    setInstallConfig(null);
+    setRegistration(null);
+    setPendingConfig(null);
+    setConnectionError(null);
+    setMissingInstallToken(true);
+    setComputerName("");
+    setCurrentRustdeskId("");
+  }
+
+  async function handleReconnect() {
+    if (platform() !== "macos" || registrationQueue.busy) return;
+
+    await runRegistrationTask(async (isLatest) => {
+      if (!isLatest()) return;
+      clearConnectionState();
+
+      try {
+        await unlockWindow();
+        if (!isLatest()) return;
+        await invoke("reset_installation_state");
+        if (!isLatest()) return;
+
+        const config = await invoke<InstallConfig | null>(
+          "read_downloaded_install_config",
+        );
+        // A platform link received during reset or Downloads access wins.
+        if (!isLatest()) return;
+        if (!config) {
+          setConnectionError(
+            "Download a new connection file from the Magenda platform and click Reconnect Device again, or connect directly from the platform.",
+          );
+          return;
+        }
+
+        setPendingConfig(config);
+        setMissingInstallToken(false);
+        const info = await getSystemInfo().catch(() => null);
+        if (!isLatest()) return;
+        const name = info?.hostname?.trim() ?? "";
+        setComputerName(name);
+        if (!name) {
+          await message("Please enter a computer name and retry the connection.", {
+            title: "Device registration",
+            kind: "info",
+          });
+          return;
+        }
+
+        // Manual registration always sends an API upsert, even for the same token.
+        await completeRegistration(config, isLatest, name);
+      } catch (err) {
+        if (!isLatest()) return;
+        const error = getErrorMessage(err, "Failed to reconnect the device.");
+        setConnectionError(error);
+        await message(error, {
+          title: "Device registration error",
+          kind: "error",
+        });
+      }
+    }, true);
+  }
+
   async function registerFromInstaller(
     launch: InstallerLaunch,
     isLatest: () => boolean,
   ) {
     if (!isLatest()) return;
 
-    setInstallerConfigError(launch.error);
-    setPendingConfig(launch.config);
+    // An installer starts a new connection. Do not show or retry the old account.
+    clearConnectionState();
 
+    let resetComplete = false;
     try {
-      if (launch.error) throw new Error(launch.error);
+      await invoke("reset_installation_state");
+      if (!isLatest()) return;
+      resetComplete = true;
+
+      const configError = launch.error || (!launch.config
+        ? "No installation token was found. Download a personalized installer or connect through the Magenda platform."
+        : null);
+      setConnectionError(configError);
+      if (configError) throw new Error(configError);
+      setPendingConfig(launch.config);
+      setMissingInstallToken(false);
+
       const wasVisible = await getCurrentWindow().isVisible();
       if (!isLatest()) return;
 
       const result = await invoke<RegistrationData>("auto_register_device", {
         config: launch.config,
+        force: true,
       });
 
       if (launch.config) setInstallConfig(launch.config);
@@ -555,8 +640,17 @@ function App() {
       if (!wasVisible) await closeWindow();
     } catch (err) {
       if (!isLatest()) return;
-      // First-time installation may have no saved name yet. Keep Retry usable.
-      if (!launch.error) await ensureComputerName().catch(() => undefined);
+      if (!resetComplete) {
+        setConnectionError(getErrorMessage(
+          err,
+          "Cannot clear the previous installation data. Run the installer again.",
+        ));
+      } else if (!launch.error && launch.config) {
+        // Retry must start with this computer's name, not a previous registration.
+        const info = await getSystemInfo().catch(() => null);
+        if (!isLatest()) return;
+        setComputerName(info?.hostname?.trim() ?? "");
+      }
       if (!isLatest()) return;
       await showWindow();
       if (!isLatest()) return;
@@ -591,7 +685,6 @@ function App() {
     await runRegistrationTask(async (isLatest) => {
       await invoke("clear_installer_launch", { requestId: launch.request_id });
       if (!isLatest()) return;
-      await initialize(!!launch.config || !!launch.error);
       await registerFromInstaller(launch, isLatest);
     });
   }
@@ -891,14 +984,11 @@ function App() {
             : null;
         if (disposed) return;
 
-        // Load the active config for retry/error UI. Manual links do not need
-        // a Downloads import or its macOS permission prompt.
-        await initialize(
-          !!installUrl ||
-            registrationQueue.hasManualRequest ||
-            !!installer?.config ||
-            !!installer?.error,
-        );
+        // Installer requests reset old state before starting their own token
+        // lookup. Regular startup may still load the saved account.
+        if (!installer) {
+          await initialize(!!installUrl || registrationQueue.hasManualRequest);
+        }
 
         // A live link takes precedence over a delayed startup link/auto request.
         if (disposed || registrationQueue.hasManualRequest || !isLatest()) {
@@ -1116,7 +1206,7 @@ function App() {
           <div className="text-2xl font-medium text-white">Magenda Support</div>
         </div>
 
-        {(missingInstallToken && !pendingConfig) || installerConfigError ? (
+        {(missingInstallToken && !pendingConfig) || connectionError ? (
           <div className="flex w-full max-w-120 flex-col items-center gap-4 px-8">
             <div className="rounded-xl bg-white/10 p-4 text-center text-white shadow-lg backdrop-blur-sm">
               <div className="mb-2 text-lg leading-none font-semibold">
@@ -1124,7 +1214,7 @@ function App() {
               </div>
 
               <div className="text-sm leading-none text-white/90">
-                {installerConfigError ||
+                {connectionError ||
                   "This computer is not connected to your Magenda account yet."}
                 <br />
                 <br />
@@ -1309,6 +1399,24 @@ function App() {
             {/* </>
             )} */}
           </form>
+        )}
+
+        {platform() === "macos" && (
+          <div className="flex w-full max-w-120 flex-col items-center gap-2 px-8 text-center text-white">
+            <p className="text-xs text-white/80">
+              To reconnect, first download a new connection file from the Magenda
+              platform to Downloads. This clears the saved connection and uses
+              the latest downloaded file.
+            </p>
+            <button
+              type="button"
+              onClick={handleReconnect}
+              disabled={processing}
+              className="rounded-md bg-white/15 px-4 py-2 text-sm hover:bg-white/25 disabled:opacity-50"
+            >
+              Reconnect Device
+            </button>
+          </div>
         )}
 
         {platform() === "macos" &&

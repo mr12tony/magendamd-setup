@@ -72,10 +72,15 @@ pub fn from_args(args: &[OsString]) -> Option<InstallerPath> {
 }
 
 pub fn resolve(request_id: u64, path: InstallerPath) -> InstallerLaunch {
-    match path.and_then(|path| config_from_installer(&path)) {
+    match path.and_then(|path| {
+        config_from_installer(&path)?.ok_or_else(|| {
+            "No installation token was found. Download a personalized installer or connect through the Magenda platform."
+                .to_owned()
+        })
+    }) {
         Ok(config) => InstallerLaunch {
             request_id,
-            config,
+            config: Some(config),
             error: None,
         },
         Err(error) => InstallerLaunch {

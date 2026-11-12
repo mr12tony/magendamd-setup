@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use std::{
     env,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
@@ -64,16 +64,26 @@ pub fn lock() -> Result<File, i32> {
     lock_in(&directory()?)
 }
 
-fn lock_in(directory: &Path) -> Result<File, i32> {
-    fs::create_dir_all(directory).map_err(|_| 40)?;
+pub fn clear_for_fresh_connection() -> Result<(), i32> {
+    // Called by Windows installers and the explicit macOS reconnect action.
+    clear_in(&directory()?)
+}
 
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(directory.join("registration.lock"))
-        .map_err(|_| 40)?;
+fn clear_in(directory: &Path) -> Result<(), i32> {
+    // Use the same lock as registration so a pending request cannot recreate
+    // the token between deleting it and deleting its registration state.
+    let _registration_lock = lock_in(directory)?;
+    clear_files_in(directory)
+}
+
+fn clear_files_in(directory: &Path) -> Result<(), i32> {
+    #[cfg(target_os = "macos")]
+    let _config_write_lock = platform::lock_install_config_write().map_err(|_| 40)?;
+    crate::registration_files::clear_files_in(directory)
+}
+
+fn lock_in(directory: &Path) -> Result<File, i32> {
+    let file = crate::registration_files::open_lock_in(directory)?;
 
     // GUI commands run in spawn_blocking. Wait for headless registration
     // instead of losing the manual request while another process holds the lock.
@@ -221,5 +231,62 @@ mod tests {
         assert!(!acquired_while_locked, "registrations must not overlap");
         assert!(status.success());
         assert!(directory.path().join("acquired").exists());
+    }
+
+    #[test]
+    fn fresh_install_reset_removes_token_and_registration_but_keeps_other_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("install.json");
+        let registration = directory.path().join("registration.json");
+        let lock = directory.path().join("registration.lock");
+        let unrelated = directory.path().join("other.json");
+        fs::write(&config, b"old token").unwrap();
+        fs::write(&registration, b"old registration").unwrap();
+        fs::write(&lock, b"").unwrap();
+        fs::write(&unrelated, b"keep").unwrap();
+
+        clear_in(directory.path()).unwrap();
+        clear_in(directory.path()).unwrap();
+
+        assert!(!config.exists());
+        assert!(!registration.exists());
+        assert!(lock.exists());
+        assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn reset_does_not_recursively_delete_a_directory_named_like_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("install.json");
+        fs::create_dir(&config).unwrap();
+        fs::write(config.join("keep"), b"keep").unwrap();
+        assert_eq!(clear_in(directory.path()), Err(40));
+        assert_eq!(fs::read(config.join("keep")).unwrap(), b"keep");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reset_waits_for_a_config_write_before_clearing_both_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let config_write = platform::lock_install_config_write().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let reset = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            done_tx.send(clear_in(&path)).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let completed_while_writing = done_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+        // Finish the concurrent write before reset is allowed to proceed.
+        fs::write(directory.path().join("install.json"), b"old token").unwrap();
+        fs::write(directory.path().join("registration.json"), b"old registration").unwrap();
+        drop(config_write);
+
+        assert!(!completed_while_writing);
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap(), Ok(()));
+        reset.join().unwrap();
+        assert!(!directory.path().join("install.json").exists());
+        assert!(!directory.path().join("registration.json").exists());
     }
 }

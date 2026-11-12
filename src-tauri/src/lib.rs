@@ -49,6 +49,7 @@ mod platform;
 mod auto_register;
 
 mod registration_state;
+mod registration_files;
 
 mod installer_launch;
 
@@ -70,6 +71,29 @@ fn clear_installer_launch(
     request_id: u64,
 ) -> Result<(), String> {
     pending.clear(request_id)
+}
+
+#[tauri::command]
+async fn reset_installation_state() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(registration_state::clear_for_fresh_connection)
+        .await
+        .map_err(|_| "Cannot clear the previous installation data.".to_owned())?
+        .map_err(|_| {
+            "Cannot clear the previous installation data. Please try again."
+                .to_owned()
+        })
+}
+
+#[tauri::command]
+async fn read_downloaded_install_config() -> Result<Option<platform::InstallConfig>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        tauri::async_runtime::spawn_blocking(platform::read_downloaded_install_config)
+            .await
+            .map_err(|_| "Cannot read the connection file from Downloads.".to_owned())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("Reading a connection file from Downloads is only supported on macOS.".to_owned())
 }
 
 #[tauri::command]
@@ -303,9 +327,10 @@ async fn get_registration_state(
 #[tauri::command]
 async fn auto_register_device(
     config: Option<platform::InstallConfig>,
+    force: Option<bool>,
 ) -> Result<registration_state::RegistrationData, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        auto_register::register(None, config)
+        auto_register::register(None, config, force.unwrap_or(false))
     })
     .await
     .map_err(|_| "Automatic registration failed.".to_owned())?
@@ -325,6 +350,7 @@ async fn register_device(
                 install_token: token,
                 mode,
             }),
+            false,
         )
     })
     .await
@@ -335,6 +361,7 @@ async fn register_device(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<_> = std::env::args_os().collect();
+
     let auto_register = args.iter().any(|arg| arg == "--auto-register");
     let installer_request = if cfg!(target_os = "windows") {
         installer_launch::from_args(&args)
@@ -397,6 +424,7 @@ pub fn run() {
             // get_install_token,
             get_install_config,
             initialize_install_config,
+            read_downloaded_install_config,
             save_install_config,
             get_rustdesk_id,
             get_rustdesk_status,
@@ -413,6 +441,7 @@ pub fn run() {
             auto_register_device,
             get_installer_launch,
             clear_installer_launch,
+            reset_installation_state,
         ])
         .run(context)
         .expect("error while running tauri application");

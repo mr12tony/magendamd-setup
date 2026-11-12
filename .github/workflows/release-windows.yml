@@ -1,0 +1,148 @@
+name: Build and Sign Windows Installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-signed-release
+  cancel-in-progress: false
+
+jobs:
+  release-windows:
+    # The Azure federated credential trusts this branch only.
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CI: "true"
+      MAGENDA_BUILD_MODE: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check release configuration
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_SIGNING_ACCOUNT_NAME }}
+          AZURE_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          VITE_PERMANENT_PASSWORD: ${{ secrets.VITE_PERMANENT_PASSWORD }}
+        run: |
+          $required = @(
+            "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID",
+            "AZURE_SIGNING_ENDPOINT", "AZURE_SIGNING_ACCOUNT_NAME",
+            "AZURE_CERTIFICATE_PROFILE_NAME", "TAURI_SIGNING_PRIVATE_KEY",
+            "VITE_PERMANENT_PASSWORD"
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing GitHub Actions variable or secret: $name"
+            }
+          }
+          foreach ($name in @("AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID")) {
+            $identifier = [Guid]::Empty
+            if (-not [Guid]::TryParse([Environment]::GetEnvironmentVariable($name), [ref]$identifier)) {
+              throw "$name must contain the ID, not the display name."
+            }
+          }
+          # Catch syntax errors in scripts before downloading/building dependencies.
+          Get-ChildItem scripts/windows -Filter *.ps1 | ForEach-Object {
+            $parseErrors = $null
+            $tokens = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check TypeScript
+        run: npm run typecheck
+
+      - name: Test registration flows
+        run: npm test
+
+      - name: Test Rust on Windows
+        env:
+          VITE_PERMANENT_PASSWORD: ${{ secrets.VITE_PERMANENT_PASSWORD }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+
+      - name: Build NSIS installer
+        env:
+          VITE_PERMANENT_PASSWORD: ${{ secrets.VITE_PERMANENT_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run build:win:release
+
+      - name: Setup signing runtime
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Prepare Azure signing tools
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_SIGNING_ACCOUNT_NAME }}
+          AZURE_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_CERTIFICATE_PROFILE_NAME }}
+        run: ./scripts/windows/prepare-ci-signing.ps1
+
+      - name: Log in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign installer and regenerate Tauri updater signature
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run sign:win:release
+
+      - name: Create checksums
+        run: |
+          $directory = "src-tauri/target/release/bundle/nsis"
+          $files = @(Get-ChildItem $directory -File | Where-Object { $_.Name -match '\.exe(\.sig)?$' })
+          if ($files.Count -ne 2) { throw "Expected one installer and its updater signature." }
+          $files | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content "$directory/SHA256SUMS.txt" -Encoding ascii
+
+      - name: Upload signed installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: MagendaSupport-windows-x64-signed
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+            src-tauri/target/release/bundle/nsis/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

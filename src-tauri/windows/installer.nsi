@@ -51,6 +51,9 @@ ${StrLoc}
 !define UNINSTALLERHEADERIMAGE "{{uninstaller_header_image}}"
 !define MAINBINARYNAME "{{main_binary_name}}"
 !define MAINBINARYSRCPATH "{{main_binary_path}}"
+; build.rs prepares the standalone helper beside the main build output. File
+; inside the uninstall section embeds it in uninstall.exe, not the app directory.
+!searchreplace MAGENDA_CLEANUP_PATH "${MAINBINARYSRCPATH}" "${MAINBINARYNAME}.exe" "magenda-uninstall-cleanup.exe"
 !define BUNDLEID "{{bundle_id}}"
 !define COPYRIGHT "{{copyright}}"
 !define OUTFILE "{{out_file}}"
@@ -184,8 +187,12 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 ; 4. Custom page to ask user if he wants to reinstall/uninstall
 ;    only if a previous installation was detected
 Var ReinstallPageCheck
+Var UninstallOnly
+Var UninstallDirectory
 Page custom PageReinstall PageLeaveReinstall
 Function PageReinstall
+  StrCpy $UninstallOnly 0
+
   ; Uninstall previous WiX installation if exists.
   ;
   ; A WiX installer stores the installation info in registry
@@ -308,7 +315,21 @@ Function PageReinstallUpdateSelection
   ${EndIf}
 FunctionEnd
 Function PageLeaveReinstall
-  ${NSD_GetState} $R2 $R1
+  StrCpy $UninstallOnly 0
+  ; Passive mode has no radio controls. Its default is install/reinstall,
+  ; never "uninstall only" (same version + unchecked first radio).
+  ${If} $PassiveMode = 1
+  ${OrIf} ${Silent}
+    StrCpy $R1 ${BST_CHECKED}
+  ${Else}
+    ${NSD_GetState} $R2 $R1
+  ${EndIf}
+
+  ${If} $R0 = 0
+  ${AndIf} $R1 = ${BST_UNCHECKED}
+  ${AndIf} $UpdateMode <> 1
+    StrCpy $UninstallOnly 1
+  ${EndIf}
 
   ; If migrating from Wix, always uninstall
   ${If} $WixMode = 1
@@ -347,16 +368,21 @@ Function PageLeaveReinstall
   reinst_uninstall:
     HideWindow
     ClearErrors
+    StrCpy $UninstallDirectory $INSTDIR
 
     ${If} $WixMode = 1
       ReadRegStr $R1 HKLM "$R6" "UninstallString"
       ExecWait '$R1' $0
     ${Else}
       ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+      ${If} $4 != ""
+        StrCpy $UninstallDirectory $4
+      ${EndIf}
       ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
       ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
-      StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
+      StrCpy $R1 "$R1 _?=$UninstallDirectory" ; append uninstall directory
+      ClearErrors
       ExecWait '$R1' $0
     ${EndIf}
 
@@ -365,7 +391,15 @@ Function PageLeaveReinstall
     ${IfThen} ${Errors} ${|} StrCpy $0 2 ${|} ; ExecWait failed, set fake exit code
 
     ${If} $0 <> 0
-    ${OrIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    ${OrIf} ${FileExists} "$UninstallDirectory\${MAINBINARYNAME}.exe"
+      ; Abort in a passive page-creation callback would skip the page and let
+      ; installation continue. Stop the process instead when removal failed.
+      ${If} $PassiveMode = 1
+      ${OrIf} ${Silent}
+        SetErrorLevel 2
+        Quit
+      ${EndIf}
+
       ; User cancelled wix uninstaller? return to select un/reinstall page
       ${If} $WixMode = 1
       ${AndIf} $0 = 1602
@@ -380,6 +414,19 @@ Function PageLeaveReinstall
       ; Other erros? show generic error message and return to select un/reinstall page
       MessageBox MB_ICONEXCLAMATION "$(unableToUninstall)"
       Abort
+    ${EndIf}
+
+    ; Only the explicit same-version Uninstall choice ends the installer.
+    ; Removing an older/newer version must still continue with installation.
+    ${If} $UninstallOnly = 1
+      ${If} $WixMode <> 1
+        ; _?= lets ExecWait wait for the real uninstaller, but prevents its
+        ; temporary self-copy. Remove it now that its process has exited.
+        Delete /REBOOTOK "$UninstallDirectory\uninstall.exe"
+        RMDir /REBOOTOK "$UninstallDirectory"
+      ${EndIf}
+      SetErrorLevel 0
+      Quit
     ${EndIf}
   reinst_done:
 FunctionEnd
@@ -417,7 +464,7 @@ FunctionEnd
 
 Function RunAutoRegister
   ; Pass the original installer path, not the installed application's filename.
-  ; Rust resolves filename > companion JSON > saved config without logging tokens.
+  ; The app resets the user's saved state, then uses filename > companion JSON.
   ; Success exits silently; registration failure opens the GUI as this user.
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" '--auto-register --installer-path "$EXEPATH"'
 FunctionEnd
@@ -739,6 +786,11 @@ Section Install
 SectionEnd
 
 Function .onInstSuccess
+  ; An uninstall-only maintenance run must never start registration.
+  ${If} $UninstallOnly = 1
+    Return
+  ${EndIf}
+
   ; Updater: сохраняем существующий запуск через /R и /ARGS.
   ${If} $UpdateMode = 1
 
@@ -795,11 +847,13 @@ FunctionEnd
 
 Section Uninstall
 
+  ; Stop the app before cleanup so an in-flight registration cannot save its
+  ; state again. Keep the installation intact until cleanup has succeeded.
+  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+
   !ifmacrodef NSIS_HOOK_PREUNINSTALL
     !insertmacro NSIS_HOOK_PREUNINSTALL
   !endif
-
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
   ; Delete the app directory and its content from disk
   ; Copy main executable
@@ -877,30 +931,14 @@ Section Uninstall
     DeleteRegKey HKCU "${UNINSTKEY}"
   !endif
 
-  ; Removes the Autostart entry for ${PRODUCTNAME} from the HKCU Run key if it exists.
-  ; This ensures the program does not launch automatically after uninstallation if it exists.
-  ; If it doesn't exist, it does nothing.
-  ; We do this when not updating (to preserve the registry value on updates)
-  ${If} $UpdateMode <> 1
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
-  ${EndIf}
-
-  ; Delete app data if the checkbox is selected
-  ; and if not updating
+  ; User files, autostart and language are handled by the embedded helper before
+  ; deleting the app. HKCU/current shell folders here may be the UAC admin's.
+  ; Only machine-wide installer metadata is removed here.
   ${If} $DeleteAppDataCheckboxState = 1
   ${AndIf} $UpdateMode <> 1
     ; Clear the install location $INSTDIR from registry
     DeleteRegKey SHCTX "${MANUPRODUCTKEY}"
     DeleteRegKey /ifempty SHCTX "${MANUKEY}"
-
-    ; Clear the install language from registry
-    DeleteRegValue HKCU "${MANUPRODUCTKEY}" "Installer Language"
-    DeleteRegKey /ifempty HKCU "${MANUPRODUCTKEY}"
-    DeleteRegKey /ifempty HKCU "${MANUKEY}"
-
-    SetShellVarContext current
-    RmDir /r "$APPDATA\${BUNDLEID}"
-    RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL

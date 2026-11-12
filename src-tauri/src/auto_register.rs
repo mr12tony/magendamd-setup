@@ -15,7 +15,7 @@ const REGISTRATION_PASSWORD: &str = include_str!(
 );
 
 pub fn run() -> i32 {
-    match register(None, None) {
+    match register(None, None, false) {
         Ok(_) => 0,
         Err(code) => code,
     }
@@ -24,6 +24,7 @@ pub fn run() -> i32 {
 pub fn register(
     requested_name: Option<String>,
     requested_config: Option<platform::InstallConfig>,
+    force: bool,
 ) -> Result<RegistrationData, i32> {
     let _registration_lock = registration_state::lock()?;
 
@@ -54,12 +55,10 @@ pub fn register(
         &rustdesk_id,
     )?;
 
-    let saved_registration = registration_state::read(&context)?;
-
-    // Headless: если эта установка уже зарегистрирована,
-    // повторный POST не нужен.
-    if !explicit_config && requested_name.is_none() {
-        if let Some(saved) = saved_registration {
+    // Only ordinary automatic startup may reuse cached registration.
+    // Installer requests reset old state first and force a fresh API upsert.
+    if !force && !explicit_config && requested_name.is_none() {
+        if let Some(saved) = registration_state::read(&context)? {
             return Ok(saved);
         }
     }

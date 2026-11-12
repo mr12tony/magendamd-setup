@@ -22,6 +22,9 @@ mod macos;
 
 mod headless;
 
+#[cfg(any(target_os = "windows", test))]
+mod windows_rustdesk;
+
 #[cfg(target_os = "windows")]
 pub use windows::*;
 

@@ -188,13 +188,11 @@ fn invalid_newest_json_never_falls_back_to_an_older_account() {
 }
 
 #[test]
-fn absent_sources_allow_the_existing_saved_config_lookup() {
+fn absent_sources_require_a_new_connection_instead_of_saved_config_lookup() {
     let directory = tempfile::tempdir().unwrap();
-    assert!(
-        config_from_installer(&directory.path().join("MagendaSupport.exe"))
-            .unwrap()
-            .is_none()
-    );
+    let launch = resolve(1, Ok(directory.path().join("MagendaSupport.exe")));
+    assert!(launch.config.is_none());
+    assert!(launch.error.unwrap().contains("No installation token was found"));
 }
 
 #[test]

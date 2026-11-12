@@ -11,35 +11,31 @@ $ProjectRoot = Resolve-Path(
 )
 
 $KeyPath = Join-Path $HOME ".tauri\magendasupport.key"
-
-if (-not (Test-Path -LiteralPath $KeyPath)) {
-    throw "Updater private key not found: $KeyPath"
-}
-
-$Password = Read-Host `
-    "Enter updater private key password" `
-    -AsSecureString
-
-$PasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR(
-    $Password
-)
+$IsCiBuild = $env:CI -eq "true" -or $env:GITHUB_ACTIONS -eq "true"
+$PasswordPtr = [IntPtr]::Zero
 
 try {
-    $PlainPassword =
-        [Runtime.InteropServices.Marshal]::PtrToStringBSTR(
+    if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+        if ($IsCiBuild) {
+            throw "Set the TAURI_SIGNING_PRIVATE_KEY GitHub Actions secret."
+        }
+        if (-not (Test-Path -LiteralPath $KeyPath)) {
+            throw "Updater private key not found: $KeyPath"
+        }
+
+        $PrivateKey = Get-Content -LiteralPath $KeyPath -Raw
+        if ([string]::IsNullOrWhiteSpace($PrivateKey)) {
+            throw "Updater private key is empty."
+        }
+
+        $Password = Read-Host "Enter updater private key password" -AsSecureString
+        $PasswordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
+        $PlainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR(
             $PasswordPtr
         )
-
-    $PrivateKey = Get-Content `
-        -LiteralPath $KeyPath `
-        -Raw
-
-    if ([string]::IsNullOrWhiteSpace($PrivateKey)) {
-        throw "Updater private key is empty."
+        $env:TAURI_SIGNING_PRIVATE_KEY = $PrivateKey
+        $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $PlainPassword
     }
-
-    $env:TAURI_SIGNING_PRIVATE_KEY = $PrivateKey
-    $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $PlainPassword
 
     Set-Location $ProjectRoot
 
@@ -50,7 +46,12 @@ try {
     Write-Host "Building Tauri Windows release..."
     Write-Host ""
 
-    npm run tauri build
+    $BuildArgs = @("run", "tauri", "--", "build", "--config", "src-tauri/tauri.windows.conf.json", "--bundles", "nsis")
+    if ($IsCiBuild) {
+        $BuildArgs += "--ci"
+    }
+    $BuildArgs += @("--", "--locked")
+    npm @BuildArgs
 
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri build failed with exit code $LASTEXITCODE"

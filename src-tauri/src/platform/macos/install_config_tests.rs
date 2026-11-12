@@ -228,6 +228,62 @@ fn deep_link_config_takes_precedence_over_a_cached_import_error() {
 }
 
 #[test]
+fn reconnect_reads_a_fresh_candidate_without_overwriting_the_saved_config() {
+    let files = ConfigFiles::new();
+    let old = validate_install_config("OLD_TOKEN", InstallMode::Prod).unwrap();
+    write_install_config(&files.destination, &old).unwrap();
+    files.download("install.json", VALID, 1000);
+    files.download(
+        "MagendaConfig-user (2).json",
+        br#"{"install_token":"  NEW_TOKEN  ","mode":"dev"}"#,
+        2000,
+    );
+
+    let candidate = read_install_config_from_directory(&files.downloads)
+        .unwrap()
+        .unwrap();
+    assert_eq!(candidate.install_token, "NEW_TOKEN");
+    assert!(matches!(candidate.mode, InstallMode::Dev));
+    assert_eq!(read_install_config(&files.destination).unwrap().unwrap().install_token, "OLD_TOKEN");
+    assert!(files.downloads.join("MagendaConfig-user (2).json").is_file());
+}
+
+#[test]
+fn reconnect_bypasses_cached_startup_failure_or_missing_file_without_saving() {
+    for invalid in [false, true] {
+        let files = ConfigFiles::new();
+        let attempt = OnceLock::new();
+        if invalid {
+            files.download("install.json", b"{incomplete", 1000);
+        }
+        let initial = import_install_config_once(&attempt, &files.downloads, &files.destination);
+        assert!(initial.is_err() || initial == Ok(false));
+
+        files.download("install.json", VALID, 2000);
+        let candidate = read_install_config_from_directory(&files.downloads)
+            .unwrap()
+            .unwrap();
+        assert_eq!(candidate.install_token, "VALID_TOKEN");
+        assert!(!files.destination.exists());
+
+        files.download("install.json", b"{incomplete", 3000);
+        assert!(read_install_config_from_directory(&files.downloads).is_err());
+        assert!(!files.destination.exists());
+    }
+}
+
+#[test]
+fn reconnect_does_not_use_an_older_download_when_the_latest_is_invalid() {
+    let files = ConfigFiles::new();
+    files.download("install.json", VALID, 1000);
+    files.download("MagendaConfig-user.json", b"{incomplete", 2000);
+    assert!(read_install_config_from_directory(&files.downloads)
+        .unwrap_err()
+        .contains("MagendaConfig-user.json"));
+    assert!(!files.destination.exists());
+}
+
+#[test]
 fn failed_atomic_save_preserves_destination_and_cleans_up_temporary_file() {
     let files = ConfigFiles::new();
     fs::create_dir_all(&files.destination).unwrap();
