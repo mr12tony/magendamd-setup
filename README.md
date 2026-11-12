@@ -130,9 +130,22 @@ initialize WebView or contact the API. It identifies the user through the shell
 on the current Windows desktop and uses that user's token for path resolution,
 file deletion and user registry cleanup, including when UAC uses another administrator.
 It does not scan other profiles or fall back to the elevated account's profile.
-The registration lock, unrelated files, downloaded configuration and RustDesk
-(including its ID) remain. This clears local credentials only; it does not delete
-the device record from the API.
+The registration lock, unrelated files and downloaded configuration remain.
+This clears local credentials only; it does not delete the device record from
+the API.
+
+Ordinary uninstall also removes the installed RustDesk program and its service
+using `rustdesk.exe --uninstall`. RustDesk's ID and settings in user and service
+profiles are kept, including when **Delete app data** is selected. An active
+RustDesk remote connection ends when the service is removed. The bundled
+`uninstall-rustdesk.ps1` script is embedded in `uninstall.exe`, not read from the
+installed application resources. It waits for the service, installation registry
+entries and program directories to disappear (up to 120 polling attempts with
+one-second pauses); exiting the launcher alone is not treated as success.
+An already removed RustDesk is a successful no-op. A missing RustDesk EXE with
+leftover installation data, concurrent setup or incomplete removal stops uninstall
+before MagendaSupport's files are removed. Repair RustDesk or let setup finish,
+then retry. The development `cleanup-windows.ps1` full-purge script is not used.
 
 With **Delete app data** selected, the helper additionally removes that user's
 `%LOCALAPPDATA%\com.magendamd.support` and `%APPDATA%\com.magendamd.support` folders
@@ -147,7 +160,7 @@ could not be extracted or launched. Cleanup is not transactional: a later error
 can leave some user data already cleared, while the application remains. Retry
 from the connected user's desktop after closing MagendaSupport. A noninteractive
 session without a desktop shell cannot perform ordinary cleanup. `/UPDATE`
-skips both user and machine token cleanup. These changes take effect after
+skips token cleanup and RustDesk removal. These changes take effect after
 installing a build containing the updated uninstaller.
 
 `src-tauri/build.rs` builds the helper automatically on Windows using its own
@@ -161,6 +174,10 @@ installer after successful removal. Cancellation or failure returns to that
 page. **Add/Reinstall**, passive installs, and **Uninstall before installing**
 for an upgrade/downgrade continue with installation and the fresh connection
 flow described above.
+**Add/Reinstall** keeps the existing RustDesk installation. **Uninstall before
+installing** removes it first and the new install deploys it again, retaining its
+saved ID/configuration. An older installed uninstaller retains its old behavior
+until a build containing these changes has been installed.
 
 Windows locates RustDesk in the same order as the deployment script:
 `%ProgramW6432%`, `%ProgramFiles%`, and `%ProgramFiles(x86)%` (each with
@@ -250,6 +267,17 @@ These operations do not need frontend `fs`, `shell`, `process` or `updater`
 permissions. Keep the Rust updater plugin and the single-instance plugin: they
 handle application updates and forward deep links/installer requests.
 
+## Support details in the application
+
+Windows and macOS show **Device ID (RustDesk)**, **Copy ID**, **Refresh ID** and
+**Open RustDesk**, including when registration fails or the installation token
+is missing. The ID is read directly from RustDesk rather than saved registration.
+It refreshes after setup/registration and when the window regains focus. The ID
+probe runs off the UI thread with a three-second timeout. If no ID is available,
+users can still open RustDesk and refresh; a failed clipboard copy leaves the ID
+selectable for manual copying. These controls do not register or reconnect the
+device. Successful hidden installer registration still closes the application.
+
 ## Validation
 
 ```sh
@@ -265,13 +293,17 @@ ordering, hidden success, visible failure/retry, and manual deep-link priority.
 They use temporary files and mocked UI/API operations, without real registration.
 On Windows, also check a signed NSIS build with a personalized filename, an API
 failure followed by Retry, and a deep link received during registration.
+Also check the support controls after a registration failure: copy the live ID,
+open the RustDesk GUI, and refresh after starting RustDesk. Repeat with RustDesk
+missing and with a missing token; the panel must remain available.
 Uninstall helper tests use temporary directories to check both checkbox choices,
 selective, repeatable cleanup, other-profile preservation, missing data, a busy
 registration lock, deletion failures and directory links. These tests do not
 exercise Windows desktop-token resolution or UAC. On Windows, verify:
 
 - Ordinary uninstall with **Delete app data** unchecked removes both registration
-  JSON files and the legacy token, while retaining RustDesk and its ID.
+  JSON files and the legacy token, plus the RustDesk program and service. RustDesk
+  user/service configuration files remain; reinstall and verify the ID is retained.
 - The same uninstall when a standard user enters a different administrator's UAC
   credentials clears the standard user's state and keeps the administrator's
   registration files. Repeat from an RDP desktop if used in deployment.
@@ -282,8 +314,16 @@ exercise Windows desktop-token resolution or UAC. On Windows, verify:
 - Same-version **Uninstall** exits without directory/install pages or registration;
   canceling the child uninstaller leaves the installation intact.
 - **Add/Reinstall**, passive `/P`, and upgrade/downgrade **Uninstall before
-  installing** continue installation; `/UPDATE` preserves saved registration.
+  installing** continue installation; `/UPDATE` preserves saved registration and
+  RustDesk. Repeat ordinary uninstall when RustDesk is already absent.
 - Cleanup failure leaves the application installed and displays an error.
+
+The RustDesk uninstall orchestration can be tested without administrator rights
+or touching real installations (all OS/process boundaries are mocked):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows-uninstall-rustdesk.test.ps1
+```
 
 macOS tests also cover reconnect cleanup, fresh Downloads reads, API failure and
 retry, and deep links arriving during reconnect. Before release, check the native

@@ -152,7 +152,13 @@ function App() {
   const registrationQueue = useRef(new RegistrationQueue()).current;
   const lastInstallerRequest = useRef(0);
 
-  const [, /*currentRustdeskId*/ setCurrentRustdeskId] = useState("");
+  // Support needs the live RustDesk ID, even if backend registration failed.
+  const [currentRustdeskId, setCurrentRustdeskId] = useState("");
+  const [readingDeviceId, setReadingDeviceId] = useState(true);
+  const [deviceIdError, setDeviceIdError] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState("");
+  const [openingRustDesk, setOpeningRustDesk] = useState(false);
+  const deviceIdRequest = useRef(0);
 
   const [, setPermissions] = useState<RustDeskPermissionsStatus | null>(null);
 
@@ -168,10 +174,6 @@ function App() {
     );
 
     setRegistration(saved);
-
-    if (saved) {
-      setCurrentRustdeskId(saved.currentRustdeskId);
-    }
 
     return saved;
   }
@@ -450,7 +452,6 @@ function App() {
     setMissingInstallToken(false);
     setRegistration(registrationData);
     setComputerName(registrationData.computerName);
-    setCurrentRustdeskId(registrationData.currentRustdeskId);
 
     return registrationData;
   }
@@ -542,7 +543,6 @@ function App() {
     setConnectionError(null);
     setMissingInstallToken(true);
     setComputerName("");
-    setCurrentRustdeskId("");
   }
 
   async function handleReconnect() {
@@ -633,7 +633,6 @@ function App() {
       setMissingInstallToken(false);
       setRegistration(result);
       setComputerName(result.computerName);
-      setCurrentRustdeskId(result.currentRustdeskId);
 
       if (!isLatest()) return;
       setPendingConfig(null);
@@ -714,18 +713,54 @@ function App() {
   // OPEN RUSTDESK
   // ============================================================
 
-  // async function handleOpenRustDesk() {
-  //   try {
-  //     await invoke("open_rustdesk");
-  //   } catch (err) {
-  //     const msg = getErrorMessage(err, "Failed to open RustDesk.");
+  async function refreshDeviceId() {
+    const request = ++deviceIdRequest.current;
+    setReadingDeviceId(true);
+    setCurrentRustdeskId("");
+    setDeviceIdError(false);
+    setCopyFeedback("");
+    try {
+      const id = await invoke<string | null>("get_rustdesk_id");
+      if (request === deviceIdRequest.current) {
+        setCurrentRustdeskId(id?.trim() ?? "");
+      }
+    } catch {
+      if (request === deviceIdRequest.current) setDeviceIdError(true);
+    } finally {
+      if (request === deviceIdRequest.current) setReadingDeviceId(false);
+    }
+  }
 
-  //     await message(msg, {
-  //       title: "RustDesk",
-  //       kind: "error",
-  //     });
-  //   }
-  // }
+  async function handleCopyDeviceId() {
+    if (!currentRustdeskId) return;
+    const request = deviceIdRequest.current;
+    try {
+      await navigator.clipboard.writeText(currentRustdeskId);
+      if (request === deviceIdRequest.current) {
+        setCopyFeedback("Device ID copied.");
+      }
+    } catch {
+      if (request === deviceIdRequest.current) {
+        const shortcut = platform() === "macos" ? "Command+C" : "Ctrl+C";
+        setCopyFeedback(`Select the Device ID and press ${shortcut} to copy it.`);
+      }
+    }
+  }
+
+  async function handleOpenRustDesk() {
+    setOpeningRustDesk(true);
+    try {
+      await invoke("open_rustdesk");
+      void refreshDeviceId();
+    } catch (err) {
+      await message(
+        getErrorMessage(err, "Failed to open RustDesk. Please reinstall Magenda Support and try again."),
+        { title: "RustDesk", kind: "error" },
+      );
+    } finally {
+      setOpeningRustDesk(false);
+    }
+  }
 
   // ============================================================
   // SUPPORT REQUEST
@@ -1058,7 +1093,6 @@ function App() {
         }
 
         setStatus(rustdeskStatus);
-        setCurrentRustdeskId(rustdeskStatus.id?.trim() ?? "");
         await checkPermissions();
 
         if (disposed || !isLatest() || platform() !== "macos") {
@@ -1089,7 +1123,6 @@ function App() {
 
         setRegistration(result);
         setComputerName(result.computerName);
-        setCurrentRustdeskId(result.currentRustdeskId);
         // Keep macOS open for RustDesk privacy permissions and Rename.
       } catch (err) {
         if (disposed || !isLatest()) {
@@ -1110,6 +1143,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!processing && !registrationQueue.busy) void refreshDeviceId();
+    // Ignore probes that finish after setup starts or this view is unmounted.
+    return () => {
+      deviceIdRequest.current++;
+    };
+  }, [processing]);
+
+  useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
@@ -1119,6 +1160,7 @@ function App() {
           return;
         }
 
+        void refreshDeviceId();
         const version = registrationQueue.version;
         try {
           const saved = await invoke<RegistrationData | null>(
@@ -1134,10 +1176,6 @@ function App() {
           }
 
           setRegistration(saved);
-
-          if (saved) {
-            setCurrentRustdeskId(saved.currentRustdeskId);
-          }
         } catch {
           // При ошибке чтения сохраняем последнее отображённое состояние.
         }
@@ -1173,265 +1211,177 @@ function App() {
   // ============================================================
 
   return (
-    <div className="relative flex min-h-screen bg-[radial-gradient(circle_at_top_right,_#547bb5_0%,_#2b579a_45%,_#18355f_100%)]">
+    <main className="app-shell">
       {processing && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-4">
-            <div
-              className="
-                h-10 w-10
-                animate-spin
-                rounded-full
-                border-4
-                border-white/30
-                border-t-white
-              "
-            />
-
-            <span className="text-sm font-medium text-white">
-              Connecting your device...
-            </span>
-          </div>
+        <div className="processing-overlay" role="status" aria-live="polite">
+          <div className="processing-spinner" aria-hidden="true" />
+          <span>Connecting your device...</span>
         </div>
       )}
 
-      <div className="flex w-full flex-col items-center justify-center gap-4 px-4 py-8">
-        <div className="flex select-none flex-col items-center justify-center gap-2">
-          <img
-            src="/magenda-support-logo.png"
-            alt="Magenda Support"
-            className="h-24"
-          />
+      <div className="app-content">
+        <header className="app-header">
+          <img src="/magenda-support-logo.png" alt="" className="app-logo" />
+          <div>
+            <h1>Magenda Support</h1>
+            <p>Remote support for this computer</p>
+          </div>
+        </header>
 
-          <div className="text-2xl font-medium text-white">Magenda Support</div>
-        </div>
+        <section aria-label="Support connection" className="panel">
+          <label htmlFor="rustdeskId" className="field-label">
+            Device ID <span className="label-detail">RustDesk</span>
+          </label>
+          <div className="field-row">
+            <input
+              id="rustdeskId"
+              type="text"
+              readOnly
+              value={currentRustdeskId}
+              placeholder={readingDeviceId ? "Reading Device ID..." : "Not available"}
+              aria-describedby="device-id-hint"
+              className="control-input device-id"
+            />
+            <button
+              type="button"
+              onClick={handleCopyDeviceId}
+              disabled={!currentRustdeskId || readingDeviceId}
+              className="control-button button-secondary"
+            >
+              Copy ID
+            </button>
+          </div>
+          <p id="device-id-hint" role="status" className="field-hint">
+            {copyFeedback || (readingDeviceId
+              ? "Reading Device ID..."
+              : currentRustdeskId
+                ? "Share this ID with your support team."
+                : deviceIdError
+                  ? "Could not read Device ID. Open RustDesk to find it, or refresh."
+                  : "Device ID is not available yet. Open RustDesk, then refresh.")}
+          </p>
+          <div className="button-row">
+            <button
+              type="button"
+              onClick={handleOpenRustDesk}
+              disabled={processing || openingRustDesk}
+              className="control-button button-primary"
+            >
+              {openingRustDesk ? "Opening RustDesk..." : "Open RustDesk"}
+            </button>
+            <button
+              type="button"
+              onClick={refreshDeviceId}
+              disabled={processing || readingDeviceId}
+              className="control-button button-secondary"
+            >
+              Refresh ID
+            </button>
+          </div>
+        </section>
 
-        {(missingInstallToken && !pendingConfig) || connectionError ? (
-          <div className="flex w-full max-w-120 flex-col items-center gap-4 px-8">
-            <div className="rounded-xl bg-white/10 p-4 text-center text-white shadow-lg backdrop-blur-sm">
-              <div className="mb-2 text-lg leading-none font-semibold">
-                Connect this computer
-              </div>
-
-              <div className="text-sm leading-none text-white/90">
+        <section aria-label="Device connection" className="panel">
+          {(missingInstallToken && !pendingConfig) || connectionError ? (
+            <div className="panel-stack">
+              <h2>Connect this computer</h2>
+              <p className={connectionError ? "notice" : "body-copy"}>
                 {connectionError ||
                   "This computer is not connected to your Magenda account yet."}
-                <br />
-                <br />
-                Open the Magenda platform and continue the connection process
-                there.
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleOpenPlatform}
-              className="
-                inline-flex
-                items-center
-                justify-center
-                rounded-md
-                border-0
-                bg-[#67ae6f]
-                px-5
-                py-2.5
-                text-sm
-                font-medium
-                text-white
-                shadow-sm
-                transition
-                hover:opacity-90
-                focus:outline-none
-                focus:ring-0
-              "
-            >
-              Open Magenda Platform
-            </button>
-
-            <div className="text-center text-xs leading-none text-white/70">
-              Magenda Support will close after opening the platform.
-              <br />
-              It will open again when you connect this computer from the
-              website.
-            </div>
-          </div>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-            }}
-            noValidate
-            className="flex w-full max-w-120 flex-col gap-2 px-8"
-          >
-            {pendingConfig && !processing && (
-              <div className="rounded-xl bg-white/10 p-4 text-center text-sm text-white">
-                Connection not completed. Retry to finish connecting this
-                computer.
-              </div>
-            )}
-
-            {registration && !pendingConfig && (
-              <div className="rounded-xl bg-white/10 p-4 text-center text-white shadow-lg backdrop-blur-sm">
-                <div className="text-sm leading-none text-white/90">
-                  This device has been successfully connected to support.
-                </div>
-              </div>
-            )}
-
-            {/* {registration ? (
-              <>
-                <div>
-                  <label
-                    htmlFor="message"
-                    className="mb-1 text-sm font-bold text-white"
-                  >
-                    Message:
-                  </label>
-
-                  <textarea
-                    value={supportMessage}
-                    onChange={(e) => {
-                      setSupportMessage(e.target.value);
-                    }}
-                    disabled={processing}
-                    id="message"
-                    placeholder="Describe your issue..."
-                    rows={3}
-                    className="w-full resize-none rounded-lg border-gray-300 px-3 py-2 shadow-sm"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleRequest}
-                  disabled={
-                    processing ||
-                    !supportMessage.trim() ||
-                    !currentRustdeskId ||
-                    !installConfig
-                  }
-                  className="
-                    ms-auto
-                    inline-flex
-                    items-center
-                    justify-center
-                    rounded-md
-                    border-0
-                    bg-[#67ae6f]
-                    px-4
-                    py-2
-                    text-sm
-                    font-medium
-                    text-white
-                    shadow-sm
-                    transition
-                    hover:opacity-90
-                    focus:outline-none
-                    focus:ring-0
-                    disabled:cursor-not-allowed
-                    disabled:opacity-50
-                  "
-                >
-                  {processing ? "Sending..." : "Request Support"}
-                </button>
-              </>
-            ) : (
-              <> */}
-            <div>
-              <label
-                htmlFor="computerName"
-                className="mb-1 text-sm font-bold text-white"
-              >
-                Computer name:
-              </label>
-
-              <input
-                type="text"
-                value={computerName}
-                onChange={(e) => {
-                  setComputerName(e.target.value);
-                }}
-                disabled={processing}
-                id="computerName"
-                placeholder="Enter computer name..."
-                className="w-full rounded-lg border-gray-300 px-3 py-2 shadow-sm"
-              />
-            </div>
-
-            <div className="flex gap-4 pt-2">
+              </p>
               <button
                 type="button"
-                onClick={handleRegister}
-                disabled={
-                  !(pendingConfig ?? installConfig) ||
-                  processing ||
-                  !computerName.trim()
-                }
-                className="
-                      ms-auto
-                      inline-flex
-                      items-center
-                      justify-center
-                      rounded-md
-                      border-0
-                      bg-[#67ae6f]
-                      px-4
-                      py-2
-                      text-sm
-                      font-medium
-                      text-white
-                      shadow-sm
-                      transition
-                      hover:opacity-90
-                      focus:outline-none
-                      focus:ring-0
-                      disabled:cursor-not-allowed
-                      disabled:opacity-50
-                    "
+                onClick={handleOpenPlatform}
+                className="control-button button-primary"
               >
-                {pendingConfig
-                  ? "Retry Connection"
-                  : registration
-                    ? "Rename Device"
-                    : "Register Device"}
+                Open Magenda Platform
               </button>
+              <p className="field-hint">
+                Continue the connection on the platform. This window will close
+                and reopen when you connect.
+              </p>
             </div>
-            {/* </>
-            )} */}
-          </form>
-        )}
-
-        {platform() === "macos" && (
-          <div className="flex w-full max-w-120 flex-col items-center gap-2 px-8 text-center text-white">
-            <p className="text-xs text-white/80">
-              To reconnect, first download a new connection file from the Magenda
-              platform to Downloads. This clears the saved connection and uses
-              the latest downloaded file.
-            </p>
-            <button
-              type="button"
-              onClick={handleReconnect}
-              disabled={processing}
-              className="rounded-md bg-white/15 px-4 py-2 text-sm hover:bg-white/25 disabled:opacity-50"
+          ) : (
+            <form
+              onSubmit={(e) => { e.preventDefault(); }}
+              noValidate
             >
-              Reconnect Device
-            </button>
-          </div>
-        )}
+              <div className="panel-heading">
+                <h2>This computer</h2>
+                {registration && !pendingConfig && (
+                  <span className="connection-badge" role="status">
+                    <span className="status-dot" aria-hidden="true" />
+                    Connected
+                  </span>
+                )}
+              </div>
+              {pendingConfig && !processing && (
+                <p className="notice">
+                  Connection not completed. Retry to finish connecting this computer.
+                </p>
+              )}
+              <label htmlFor="computerName" className="field-label">
+                Computer name
+              </label>
+              <div className="field-row">
+                <input
+                  type="text"
+                  value={computerName}
+                  onChange={(e) => { setComputerName(e.target.value); }}
+                  disabled={processing}
+                  id="computerName"
+                  placeholder="Enter computer name..."
+                  className="control-input"
+                />
+                <button
+                  type="button"
+                  onClick={handleRegister}
+                  disabled={
+                    !(pendingConfig ?? installConfig) ||
+                    processing ||
+                    !computerName.trim()
+                  }
+                  className={`control-button ${registration && !pendingConfig ? "button-secondary" : "button-primary"}`}
+                >
+                  {pendingConfig
+                    ? "Retry Connection"
+                    : registration
+                      ? "Rename Device"
+                      : "Register Device"}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {platform() === "macos" && (
+            <details className="disclosure reconnect-section">
+              <summary>Reconnect this computer</summary>
+              <div className="disclosure-content">
+                <p className="body-copy">
+                  Download a new connection file from Magenda to Downloads.
+                  Reconnecting clears the saved connection and uses the latest file.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleReconnect}
+                  disabled={processing}
+                  className="control-button button-secondary"
+                >
+                  Reconnect Device
+                </button>
+              </div>
+            </details>
+          )}
+        </section>
 
         {platform() === "macos" &&
           (status?.installed || installConfig || pendingConfig) && (
-            <div className="flex w-full max-w-120 flex-col gap-3 rounded-xl bg-white/10 p-4 text-white">
-              <div className="text-sm font-semibold">Allow remote assistance</div>
-              <p className="text-sm text-white/90">
-                Open RustDesk, then enable RustDesk in Screen Recording and
-                Accessibility in macOS System Settings. If RustDesk is missing
-                from the list, add it from Applications. Quit and reopen RustDesk
-                after changing these permissions.
+            <section aria-labelledby="permissions-title" className="panel panel-stack">
+              <h2 id="permissions-title">Allow remote assistance</h2>
+              <p className="body-copy">
+                Enable RustDesk in Screen Recording and Accessibility in macOS settings.
               </p>
-              <div className="flex flex-wrap gap-2">
+              <div className="button-row equal-buttons">
                 {[
-                  ["Open RustDesk", "open_rustdesk"],
                   ["Screen Recording", "open_screen_recording_settings"],
                   ["Accessibility", "open_accessibility_settings"],
                 ].map(([label, command]) => (
@@ -1445,128 +1395,41 @@ function App() {
                       } catch {
                         await message(
                           "Open RustDesk or Privacy & Security from macOS Settings to continue.",
-                          {
-                            title: "Magenda Support",
-                            kind: "error",
-                          },
+                          { title: "Magenda Support", kind: "error" },
                         );
                       }
                     }}
-                    className="rounded-md bg-white/15 px-3 py-2 text-sm hover:bg-white/25 disabled:opacity-50"
+                    className="control-button button-secondary"
                   >
                     {label}
                   </button>
                 ))}
               </div>
-              {registration && !pendingConfig && (
-                <button
-                  type="button"
-                  onClick={closeWindow}
-                  disabled={processing}
-                  className="self-end rounded-md bg-[#67ae6f] px-4 py-2 text-sm disabled:opacity-50"
-                >
-                  Done
-                </button>
-              )}
-            </div>
+              <details className="disclosure">
+                <summary>Setup instructions</summary>
+                <p className="body-copy disclosure-content">
+                  Open RustDesk before changing permissions. If RustDesk is missing
+                  from the list, add it from Applications. Quit and reopen RustDesk
+                  after changing these permissions.
+                </p>
+              </details>
+            </section>
           )}
 
-        {/* <button
-          type="button"
-          onClick={handleOpenRustDesk}
-          className="
-            inline-flex
-            items-center
-            justify-center
-            rounded-md
-            bg-white/15
-            px-4
-            py-2
-            text-sm
-            font-medium
-            text-white
-            transition
-            hover:bg-white/20
-          "
-        >
-          Open RustDesk
-        </button> */}
-
-        {/* <div className="w-full max-w-md rounded-xl bg-white/10 p-5 text-white">
-          <h2 className="text-lg font-semibold">RustDesk permissions</h2>
-
-          <div className="mt-4 flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-4">
-              <span>Accessibility</span>
-
-              <div className="flex items-center gap-2">
-                {permissions && (
-                  <span className="text-xs text-white/70">
-                    {permissions.accessibility ? "Granted" : "Required"}
-                  </span>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => invoke("open_accessibility_settings")}
-                  className="rounded-md bg-white/15 px-3 py-1.5 text-sm"
-                >
-                  Open Settings
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-4">
-              <span>Screen Recording</span>
-
-              <div className="flex items-center gap-2">
-                {permissions && (
-                  <span className="text-xs text-white/70">
-                    {permissions.screen_recording ? "Granted" : "Required"}
-                  </span>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => invoke("open_screen_recording_settings")}
-                  className="rounded-md bg-white/15 px-3 py-1.5 text-sm"
-                >
-                  Open Settings
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-4">
-              <span>Input Monitoring</span>
-
-              <div className="flex items-center gap-2">
-                {permissions && (
-                  <span className="text-xs text-white/70">
-                    {permissions.input_monitoring ? "Granted" : "Required"}
-                  </span>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => invoke("open_input_monitoring_settings")}
-                  className="rounded-md bg-white/15 px-3 py-1.5 text-sm"
-                >
-                  Open Settings
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={checkPermissions}
-            className="mt-5 rounded-md bg-white px-4 py-2 text-sm font-medium text-[#2b579a]"
-          >
-            Check again
-          </button>
-        </div> */}
+        {platform() === "macos" && registration && !pendingConfig && (
+          <footer className="app-footer">
+            <button
+              type="button"
+              onClick={closeWindow}
+              disabled={processing}
+              className="control-button button-primary"
+            >
+              Done
+            </button>
+          </footer>
+        )}
       </div>
-    </div>
+    </main>
   );
 }
 

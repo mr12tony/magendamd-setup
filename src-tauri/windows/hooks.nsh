@@ -1,5 +1,6 @@
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+!define MAGENDA_RUSTDESK_UNINSTALL_SCRIPT "${__FILEDIR__}\uninstall-rustdesk.ps1"
 
 ; Installation configuration is resolved by the application launched from
 ; .onInstSuccess with --installer-path. Do not copy companion JSON to ProgramData:
@@ -128,7 +129,6 @@
 !macro NSIS_HOOK_PREUNINSTALL
 
     DetailPrint "MagendaSupport uninstall started."
-    DetailPrint "RustDesk will remain installed."
 
     ${If} $UpdateMode <> 1
         DetailPrint "Clearing registration for the Windows desktop user..."
@@ -162,6 +162,24 @@
 
         !insertmacro MAGENDA_CLEAR_LEGACY_TOKEN
         DetailPrint "Previous user token and registration cleared."
+
+        DetailPrint "Removing RustDesk; its ID and settings will be kept..."
+        ClearErrors
+        File /oname=uninstall-rustdesk.ps1 "${MAGENDA_RUSTDESK_UNINSTALL_SCRIPT}"
+        ${If} ${Errors}
+            StrCpy $1 2
+        ${Else}
+            nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\uninstall-rustdesk.ps1"'
+            Pop $1
+        ${EndIf}
+        Delete "$PLUGINSDIR\uninstall-rustdesk.ps1"
+        ${If} $1 != 0
+            SetErrorLevel 2
+            MessageBox MB_ICONSTOP "RustDesk removal failed (code $1). MagendaSupport has been kept. See Details, let any RustDesk setup finish, then retry uninstalling." /SD IDOK
+            Abort
+        ${EndIf}
+    ${Else}
+        DetailPrint "Update mode: keeping RustDesk and saved registration."
     ${EndIf}
 
 !macroend

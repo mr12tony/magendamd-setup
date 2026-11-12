@@ -509,6 +509,7 @@ Function un.ConfirmLeave
   SendMessage $DeleteAppDataCheckbox ${BM_GETCHECK} 0 0 $DeleteAppDataCheckboxState
 FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_PRE un.SkipIfPassive
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "MagendaSupport and RustDesk will be removed. RustDesk ID and settings will be kept.$\r$\nAny active RustDesk connection will end."
 !insertmacro MUI_UNPAGE_CONFIRM
 
 ; 2. Uninstalling Page

@@ -1,2 +1,346 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/forms";
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f5f8ff;
+  background: #1e3f70;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  --control-height: 40px;
+  --control-radius: 8px;
+  --text-muted: #cedcf0;
+  --border-color: rgb(212 230 255 / 18%);
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 20px;
+  background: radial-gradient(ellipse at top right, #3b6298 0%, #284f85 48%, #1c3a66 100%);
+}
+
+.app-content {
+  display: flex;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 2px 4px;
+}
+
+.app-logo {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.4px;
+}
+
+.app-header p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 6%);
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.panel-stack,
+.disclosure-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #eef4ff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.label-detail {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.control-input,
+.control-button {
+  box-sizing: border-box;
+  height: var(--control-height);
+  border: 1px solid var(--border-color);
+  border-radius: var(--control-radius);
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.control-input {
+  width: 100%;
+  min-width: 0;
+  background: rgb(8 27 53 / 20%);
+  color: #fff;
+  box-shadow: none;
+}
+
+.control-input::placeholder {
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: normal;
+}
+
+.device-id {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+}
+
+.control-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.button-primary {
+  border-color: transparent;
+  background: #90d39a;
+  color: #153b27;
+}
+
+.button-primary:hover:not(:disabled) {
+  background: #a6e0af;
+}
+
+.button-secondary {
+  background: rgb(255 255 255 / 8%);
+  color: #f5f8ff;
+}
+
+.button-secondary:hover:not(:disabled) {
+  background: rgb(255 255 255 / 15%);
+  border-color: rgb(212 230 255 / 35%);
+}
+
+.control-input:focus,
+.control-button:focus-visible,
+.disclosure summary:focus-visible {
+  outline: 2px solid #c1ddff;
+  outline-offset: 2px;
+  border-color: #c1ddff;
+  box-shadow: none;
+}
+
+.control-button:disabled,
+.control-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.equal-buttons > button {
+  flex: 1 1 auto;
+}
+
+.body-copy,
+.field-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.field-row + .field-hint {
+  margin: 8px 0 12px;
+}
+
+.connection-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #c4f0cb;
+  font-size: 11px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a2e2af;
+}
+
+.notice {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border: 1px solid rgb(255 219 151 / 22%);
+  border-radius: var(--control-radius);
+  background: rgb(255 219 151 / 8%);
+  color: #ffe3b1;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.panel-stack > .notice {
+  margin: 0;
+}
+
+.disclosure {
+  width: 100%;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.disclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  gap: 8px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.disclosure[open] summary::after {
+  transform: rotate(225deg) translate(-2px, -1px);
+}
+
+.disclosure-content {
+  margin-top: 8px;
+}
+
+.reconnect-section {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.app-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.app-footer .control-button {
+  min-width: 88px;
+}
+
+.processing-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  background: rgb(10 24 43 / 80%);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 14px;
+}
+
+.processing-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgb(255 255 255 / 25%);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 380px) {
+  .app-shell { padding: 12px; }
+  .panel { padding: 12px; }
+  .field-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .control-button { transition: none; }
+  .processing-spinner { animation: none; }
+}

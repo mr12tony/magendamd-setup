@@ -119,8 +119,12 @@ fn save_install_config(token: String, mode: platform::InstallMode) -> Result<(),
 }
 
 #[tauri::command]
-fn get_rustdesk_id() -> Result<Option<String>, String> {
-    platform::get_rustdesk_id()
+async fn get_rustdesk_id() -> Result<Option<String>, String> {
+    // The support panel must stay responsive if RustDesk is unavailable.
+    // The headless probe has a timeout and hides its console on Windows.
+    tauri::async_runtime::spawn_blocking(platform::get_rustdesk_id_headless)
+        .await
+        .map_err(|_| "Failed to read RustDesk ID.".to_owned())?
 }
 
 static RUSTDESK_SETUP_LOCK: std::sync::Mutex<()> =

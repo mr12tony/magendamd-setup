@@ -66,6 +66,7 @@ function app(options = {}) {
   const calls = [];
   const dialogs = [];
   const questions = [];
+  const clipboard = [];
   const timers = new Map();
   let timerId = 0;
   let activeConfig = options.config ?? null;
@@ -94,6 +95,7 @@ function app(options = {}) {
     calls,
     dialogs,
     questions,
+    clipboard,
     get activeConfig() {
       return activeConfig;
     },
@@ -125,7 +127,10 @@ function app(options = {}) {
       nodes(tree).find(
         (node) => node.type === "button" && content(node) === label,
       ),
-    idle: () => until(() => !state.busy && !pendingRender),
+    get deviceId() {
+      return nodes(tree).find((node) => node.props?.id === "rustdeskId")?.props.value;
+    },
+    idle: () => until(() => !state.busy && !pendingRender && !state.text.includes("Reading Device ID...")),
     runTimers: async () => {
       const callbacks = [...timers.values()];
       timers.clear();
@@ -160,8 +165,16 @@ function app(options = {}) {
     },
     useEffect(effect, deps) {
       const i = cursor++;
-      if (!hooks[i] || deps === undefined) effects.push(effect);
-      hooks[i] = { effect };
+      const previous = hooks[i];
+      if (!previous || deps === undefined || deps.some((value, index) => !Object.is(value, previous.deps?.[index]))) {
+        effects.push(() => {
+          previous?.cleanup?.();
+          const cleanup = effect();
+          hooks[i].cleanup = cleanup;
+          return cleanup;
+        });
+      }
+      hooks[i] = { deps, cleanup: previous?.cleanup };
     },
   };
 
@@ -195,6 +208,8 @@ function app(options = {}) {
         return readOverride ? readOverride() : saved;
       case "get_rustdesk_status":
         return status;
+      case "get_rustdesk_id":
+        return options.readDeviceId ? options.readDeviceId() : status.id;
       case "get_rustdesk_permissions_status":
         return {};
       case "open_rustdesk":
@@ -288,6 +303,14 @@ function app(options = {}) {
       "./App.css": {},
     },
     {
+      navigator: {
+        clipboard: {
+          writeText: async (value) => {
+            await options.copy?.(value);
+            clipboard.push(value);
+          },
+        },
+      },
       setTimeout: (callback) => {
         const id = ++timerId;
         timers.set(id, callback);
@@ -396,7 +419,7 @@ test("macOS reconnect clears the old account before discovery and saves only aft
   assert.ok(commands.indexOf("reset_installation_state") < commands.indexOf("read_downloaded_install_config"));
   assert.ok(commands.indexOf("read_downloaded_install_config") < commands.indexOf("register_device"));
   assert.equal(state.activeConfig, null);
-  assert.equal(state.text.includes("successfully connected"), false);
+  assert.equal(state.text.includes("Connected"), false);
   assert.equal(manualCalls(state)[0].args.computerName, "Test computer");
   api.resolve();
   await reconnect;
@@ -608,7 +631,7 @@ test("macOS permission controls open RustDesk and settings, and Done closes the 
   ]) {
     assert.equal(state.button(label).props.disabled, false);
     await state.button(label).props.onClick();
-    assert.equal(state.calls.at(-1).command, command);
+    assert.ok(state.calls.some((call) => call.command === command));
   }
   assert.equal(state.closes, 0);
   await state.button("Done").props.onClick();
@@ -653,9 +676,124 @@ test("Windows startup does not run the macOS update or display its permission co
     state.calls.some((call) => call.command === "configure_rustdesk"),
     false,
   );
-  assert.equal(state.button("Open RustDesk"), undefined);
+  assert.ok(state.button("Open RustDesk"));
+  assert.equal(state.button("Screen Recording"), undefined);
+  assert.equal(state.button("Accessibility"), undefined);
   assert.equal(state.button("Done"), undefined);
 });
+
+test("a failed installer registration still exposes the live ID, copy and RustDesk launch", async () => {
+  const state = app({
+    platform: "windows",
+    visible: false,
+    installer: installerLaunch("NEW"),
+    auto: () => { throw "Cannot connect to the registration server."; },
+    readDeviceId: () => " 987654321 ",
+  });
+  await state.idle();
+  assert.equal(state.visible, true);
+  assert.equal(state.activeConfig, null);
+  assert.equal(state.deviceId, "987654321");
+  assert.ok(state.button("Retry Connection"));
+  assert.equal(state.button("Open RustDesk").props.disabled, false);
+  await state.button("Copy ID").props.onClick();
+  assert.deepEqual(state.clipboard, ["987654321"]);
+  await state.button("Open RustDesk").props.onClick();
+  await state.idle();
+  assert.equal(state.calls.filter((call) => call.command === "open_rustdesk").length, 1);
+  assert.equal(state.closes, 0);
+  assert.equal(autoCalls(state).length, 1);
+  assert.equal(manualCalls(state).length, 0);
+});
+
+test("an unregistered Windows device can share its ID and open RustDesk without a token", async () => {
+  const state = app({ platform: "windows" });
+  await state.idle();
+  assert.ok(state.button("Open Magenda Platform"));
+  assert.equal(state.deviceId, "123456789");
+  await state.button("Open RustDesk").props.onClick();
+  await state.idle();
+  assert.equal(state.closes, 0);
+  assert.equal(autoCalls(state).length + manualCalls(state).length, 0);
+});
+
+test("support ID is refreshed from RustDesk and never falls back to saved registration", async () => {
+  let id = "999888777";
+  const state = app({
+    platform: "windows",
+    config: config("A"),
+    saved: registered(),
+    readDeviceId: () => id,
+  });
+  await state.idle();
+  assert.equal(state.deviceId, "999888777");
+  id = null;
+  await state.focus();
+  await state.idle();
+  assert.equal(state.deviceId, "");
+  assert.equal(state.button("Copy ID").props.disabled, true);
+  assert.equal(state.button("Open RustDesk").props.disabled, false);
+  id = "111222333";
+  await state.button("Refresh ID").props.onClick();
+  await state.idle();
+  assert.equal(state.deviceId, id);
+});
+
+test("failed ID reads leave RustDesk accessible and can be retried", async () => {
+  let failed = true;
+  const state = app({
+    platform: "windows",
+    readDeviceId: () => {
+      if (failed) throw "RustDesk ID probe failed";
+      return "555666777";
+    },
+    openSettings: () => { throw "RustDesk is not installed."; },
+  });
+  await state.idle();
+  assert.match(state.text, /Could not read Device ID/);
+  assert.equal(state.dialogs.length, 0);
+  assert.equal(state.button("Copy ID").props.disabled, true);
+  assert.equal(state.button("Open RustDesk").props.disabled, false);
+  await state.button("Open RustDesk").props.onClick();
+  await state.idle();
+  assert.equal(state.dialogs.at(-1).text, "RustDesk is not installed.");
+  assert.equal(state.closes, 0);
+  failed = false;
+  await state.button("Refresh ID").props.onClick();
+  await state.idle();
+  assert.equal(state.deviceId, "555666777");
+  assert.doesNotMatch(state.text, /Could not read/);
+});
+
+test("an old ID probe cannot overwrite a newer focus refresh", async () => {
+  let probe = () => "123456789";
+  const state = app({ platform: "windows", readDeviceId: () => probe() });
+  await state.idle();
+  const old = deferred();
+  probe = () => old.promise;
+  await state.focus();
+  probe = () => "999888777";
+  await state.focus();
+  await state.idle();
+  old.resolve("000000000");
+  await new Promise(setImmediate);
+  assert.equal(state.deviceId, "999888777");
+});
+
+for (const [platform, shortcut] of [["windows", "Ctrl+C"], ["macos", "Command+C"]]) {
+  test(`${platform} retains a selectable ID when clipboard access fails`, async () => {
+    const state = app({
+      platform,
+      copy: () => { throw new Error("Clipboard unavailable"); },
+    });
+    await state.idle();
+    await state.button("Copy ID").props.onClick();
+    await state.idle();
+    assert.ok(state.text.includes(shortcut));
+    assert.equal(state.deviceId, "123456789");
+    assert.deepEqual(state.clipboard, []);
+  });
+}
 
 test("the update timer does not interrupt a failed installer candidate awaiting Retry", async () => {
   const state = app({
@@ -904,7 +1042,7 @@ test("ordinary reinstall with no new token clears old state and asks for a platf
   assert.ok(state.button("Open Magenda Platform"));
   assert.equal(state.button("Rename Device"), undefined);
   await state.focus();
-  assert.equal(state.text.includes("successfully connected"), false);
+  assert.equal(state.text.includes("Connected"), false);
   await state.links(link("NEW", "dev"));
   assert.deepEqual(state.activeConfig, config("NEW", "dev"));
 });
@@ -925,10 +1063,10 @@ test("failed reinstall retains only the new candidate for Retry", async () => {
   assert.equal(state.closes, 0);
   assert.equal(state.activeConfig, null);
   assert.equal(state.button("Rename Device"), undefined);
-  assert.equal(state.text.includes("successfully connected"), false);
+  assert.equal(state.text.includes("Connected"), false);
   assert.equal(state.button("Retry Connection").props.disabled, false);
   await state.focus();
-  assert.equal(state.text.includes("successfully connected"), false);
+  assert.equal(state.text.includes("Connected"), false);
   await state.button("Retry Connection").props.onClick();
   assert.equal(manualCalls(state)[0].args.token, "NEW");
   assert.equal(manualCalls(state)[0].args.mode, "dev");
@@ -1101,7 +1239,7 @@ test("a rejected candidate preserves the active config and Retry uses that candi
   await state.links(link("B", "dev"));
   await state.idle();
   assert.deepEqual(state.activeConfig, config("A"));
-  assert.equal(state.text.includes("successfully connected"), false);
+  assert.equal(state.text.includes("Connected"), false);
   assert.equal(state.button("Retry Connection").props.disabled, false);
   reject = false;
   await state.button("Retry Connection").props.onClick();
@@ -1132,7 +1270,7 @@ test("a failed newer link can be retried after an older link succeeded", async (
   await Promise.all([b, c]);
   await state.idle();
   assert.deepEqual(state.activeConfig, config("B"));
-  assert.equal(state.text.includes("successfully connected"), false);
+  assert.equal(state.text.includes("Connected"), false);
   await state.button("Retry Connection").props.onClick();
   assert.equal(manualCalls(state).at(-1).args.token, "C");
 });
