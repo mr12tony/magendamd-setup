@@ -35,7 +35,9 @@ type RustDeskStatus = {
 };
 
 function hasRequiredRustDeskVersion(status: RustDeskStatus) {
-  const version = status.version?.trim().match(/^(\d+\.\d+\.\d+)(?:$|[.+-])/)?.[1];
+  const version = status.version
+    ?.trim()
+    .match(/^(\d+\.\d+\.\d+)(?:$|[.+-])/)?.[1];
   return status.installed && version === REQUIRED_RUSTDESK_VERSION;
 }
 
@@ -146,9 +148,10 @@ function App() {
   const [pendingConfig, setPendingConfig] = useState<InstallConfig | null>(
     null,
   );
-  const [connectionError, setConnectionError] = useState<
-    string | null
-  >(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  // Retain only the platform environment while Windows waits for a fresh link.
+  const [windowsReconnectMode, setWindowsReconnectMode] =
+    useState<InstallMode | null>(null);
   const registrationQueue = useRef(new RegistrationQueue()).current;
   const lastInstallerRequest = useRef(0);
 
@@ -219,7 +222,12 @@ function App() {
   }
 
   async function checkForUpdates() {
-    if (registrationQueue.busy || pendingConfig || connectionError) {
+    if (
+      registrationQueue.busy ||
+      pendingConfig ||
+      connectionError ||
+      windowsReconnectMode !== null
+    ) {
       return;
     }
 
@@ -281,34 +289,6 @@ function App() {
       !!value.id?.trim()
     );
   }
-
-  // function getRustDeskHealthProblems(value: RustDeskStatus) {
-  //   const problems: string[] = [];
-
-  //   if (!value.installed) {
-  //     problems.push("RustDesk is not installed");
-  //   }
-
-  //   if (!value.version?.startsWith("1.4.9")) {
-  //     problems.push(
-  //       `Unexpected RustDesk version: ${value.version ?? "unknown"}`,
-  //     );
-  //   }
-
-  //   if (!value.service_running) {
-  //     problems.push("RustDesk service is not running");
-  //   }
-
-  //   if (!value.configured) {
-  //     problems.push("RustDesk configuration is invalid");
-  //   }
-
-  //   if (!value.id?.trim()) {
-  //     problems.push("RustDesk ID is missing");
-  //   }
-
-  //   return problems;
-  // }
 
   function getErrorMessage(err: unknown, fallback: string) {
     if (err instanceof Error) {
@@ -426,7 +406,7 @@ function App() {
       throw new Error("Installation token is missing.");
     }
 
-    const name = requestedName ?? await ensureComputerName();
+    const name = requestedName ?? (await ensureComputerName());
 
     let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
 
@@ -502,13 +482,10 @@ function App() {
       }
 
       setPendingConfig(null);
-      await message(
-        "This device has been successfully connected to support.",
-        {
-          title: "Device registered",
-          kind: "info",
-        },
-      );
+      await message("This device has been successfully connected to support.", {
+        title: "Device registered",
+        kind: "info",
+      });
 
       // Another link may arrive while the success dialog is open.
       if (isLatest() && platform() !== "macos") {
@@ -543,20 +520,39 @@ function App() {
     setConnectionError(null);
     setMissingInstallToken(true);
     setComputerName("");
+    setWindowsReconnectMode(null);
   }
 
   async function handleReconnect() {
-    if (platform() !== "macos" || registrationQueue.busy) return;
+    const isWindows = platform() === "windows";
+    if ((!isWindows && platform() !== "macos") || registrationQueue.busy)
+      return;
+    const mode =
+      pendingConfig?.mode ??
+      installConfig?.mode ??
+      windowsReconnectMode ??
+      "prod";
 
-    await runRegistrationTask(async (isLatest) => {
-      if (!isLatest()) return;
+    if (isWindows) {
       clearConnectionState();
+      setWindowsReconnectMode(mode);
+    }
+    await runRegistrationTask(async (isLatest) => {
+      if (!isWindows) {
+        if (!isLatest()) return;
+        clearConnectionState();
+      }
 
       try {
         await unlockWindow();
-        if (!isLatest()) return;
+        // Finish an explicit Windows reset even if a new link is already queued.
+        // The queue ensures the new registration starts only after this cleanup.
+        if (!isWindows && !isLatest()) return;
         await invoke("reset_installation_state");
         if (!isLatest()) return;
+
+        // Windows waits for a new platform link; never reuse Downloads or an old token.
+        if (isWindows) return;
 
         const config = await invoke<InstallConfig | null>(
           "read_downloaded_install_config",
@@ -577,10 +573,13 @@ function App() {
         const name = info?.hostname?.trim() ?? "";
         setComputerName(name);
         if (!name) {
-          await message("Please enter a computer name and retry the connection.", {
-            title: "Device registration",
-            kind: "info",
-          });
+          await message(
+            "Please enter a computer name and retry the connection.",
+            {
+              title: "Device registration",
+              kind: "info",
+            },
+          );
           return;
         }
 
@@ -613,9 +612,11 @@ function App() {
       if (!isLatest()) return;
       resetComplete = true;
 
-      const configError = launch.error || (!launch.config
-        ? "No installation token was found. Download a personalized installer or connect through the Magenda platform."
-        : null);
+      const configError =
+        launch.error ||
+        (!launch.config
+          ? "No installation token was found. Download a personalized installer or connect through the Magenda platform."
+          : null);
       setConnectionError(configError);
       if (configError) throw new Error(configError);
       setPendingConfig(launch.config);
@@ -640,10 +641,12 @@ function App() {
     } catch (err) {
       if (!isLatest()) return;
       if (!resetComplete) {
-        setConnectionError(getErrorMessage(
-          err,
-          "Cannot clear the previous installation data. Run the installer again.",
-        ));
+        setConnectionError(
+          getErrorMessage(
+            err,
+            "Cannot clear the previous installation data. Run the installer again.",
+          ),
+        );
       } else if (!launch.error && launch.config) {
         // Retry must start with this computer's name, not a previous registration.
         const info = await getSystemInfo().catch(() => null);
@@ -742,7 +745,9 @@ function App() {
     } catch {
       if (request === deviceIdRequest.current) {
         const shortcut = platform() === "macos" ? "Command+C" : "Ctrl+C";
-        setCopyFeedback(`Select the Device ID and press ${shortcut} to copy it.`);
+        setCopyFeedback(
+          `Select the Device ID and press ${shortcut} to copy it.`,
+        );
       }
     }
   }
@@ -754,7 +759,10 @@ function App() {
       void refreshDeviceId();
     } catch (err) {
       await message(
-        getErrorMessage(err, "Failed to open RustDesk. Please reinstall Magenda Support and try again."),
+        getErrorMessage(
+          err,
+          "Failed to open RustDesk. Please reinstall Magenda Support and try again.",
+        ),
         { title: "RustDesk", kind: "error" },
       );
     } finally {
@@ -886,14 +894,26 @@ function App() {
   // }
 
   async function handleOpenPlatform() {
+    const version = registrationQueue.version;
     try {
-      const url = `${getFrontendUrl(installConfig?.mode)}?install=rustdesk`;
+      const mode =
+        pendingConfig?.mode ??
+        installConfig?.mode ??
+        windowsReconnectMode ??
+        "prod";
+      const url = `${getFrontendUrl(mode)}?install=rustdesk`;
 
       // Сначала открываем сайт в браузере.
       await openUrl(url);
 
-      // Затем закрываем MagendaSupport.
-      await closeWindow();
+      // A Windows reconnect waits here for the platform to send its new link.
+      if (
+        windowsReconnectMode === null &&
+        !registrationQueue.busy &&
+        version === registrationQueue.version
+      ) {
+        await closeWindow();
+      }
     } catch (err) {
       console.error("Failed to open Magenda platform:", err);
 
@@ -1062,7 +1082,9 @@ function App() {
           return;
         }
 
-        let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
+        let rustdeskStatus = await invoke<RustDeskStatus>(
+          "get_rustdesk_status",
+        );
 
         if (disposed || !isLatest()) {
           return;
@@ -1238,7 +1260,9 @@ function App() {
               type="text"
               readOnly
               value={currentRustdeskId}
-              placeholder={readingDeviceId ? "Reading Device ID..." : "Not available"}
+              placeholder={
+                readingDeviceId ? "Reading Device ID..." : "Not available"
+              }
               aria-describedby="device-id-hint"
               className="control-input device-id"
             />
@@ -1252,13 +1276,14 @@ function App() {
             </button>
           </div>
           <p id="device-id-hint" role="status" className="field-hint">
-            {copyFeedback || (readingDeviceId
-              ? "Reading Device ID..."
-              : currentRustdeskId
-                ? "Share this ID with your support team."
-                : deviceIdError
-                  ? "Could not read Device ID. Open RustDesk to find it, or refresh."
-                  : "Device ID is not available yet. Open RustDesk, then refresh.")}
+            {copyFeedback ||
+              (readingDeviceId
+                ? "Reading Device ID..."
+                : currentRustdeskId
+                  ? "Share this ID with your support team."
+                  : deviceIdError
+                    ? "Could not read Device ID. Open RustDesk to find it, or refresh."
+                    : "Device ID is not available yet. Open RustDesk, then refresh.")}
           </p>
           <div className="button-row">
             <button
@@ -1296,13 +1321,16 @@ function App() {
                 Open Magenda Platform
               </button>
               <p className="field-hint">
-                Continue the connection on the platform. This window will close
-                and reopen when you connect.
+                {windowsReconnectMode !== null
+                  ? "Connect this computer on the platform and allow it to open Magenda Support. This window will stay open while you connect."
+                  : "Continue the connection on the platform. This window will close and reopen when you connect."}
               </p>
             </div>
           ) : (
             <form
-              onSubmit={(e) => { e.preventDefault(); }}
+              onSubmit={(e) => {
+                e.preventDefault();
+              }}
               noValidate
             >
               <div className="panel-heading">
@@ -1316,7 +1344,8 @@ function App() {
               </div>
               {pendingConfig && !processing && (
                 <p className="notice">
-                  Connection not completed. Retry to finish connecting this computer.
+                  Connection not completed. Retry to finish connecting this
+                  computer.
                 </p>
               )}
               <label htmlFor="computerName" className="field-label">
@@ -1326,7 +1355,9 @@ function App() {
                 <input
                   type="text"
                   value={computerName}
-                  onChange={(e) => { setComputerName(e.target.value); }}
+                  onChange={(e) => {
+                    setComputerName(e.target.value);
+                  }}
                   disabled={processing}
                   id="computerName"
                   placeholder="Enter computer name..."
@@ -1352,13 +1383,14 @@ function App() {
             </form>
           )}
 
-          {platform() === "macos" && (
+          {(platform() === "macos" || platform() === "windows") && (
             <details className="disclosure reconnect-section">
               <summary>Reconnect this computer</summary>
               <div className="disclosure-content">
                 <p className="body-copy">
-                  Download a new connection file from Magenda to Downloads.
-                  Reconnecting clears the saved connection and uses the latest file.
+                  {platform() === "windows"
+                    ? "Clear the saved connection, then connect this computer again from the Magenda platform. Your RustDesk ID and settings are kept."
+                    : "Download a new connection file from Magenda to Downloads. Reconnecting clears the saved connection and uses the latest file."}
                 </p>
                 <button
                   type="button"
@@ -1375,10 +1407,14 @@ function App() {
 
         {platform() === "macos" &&
           (status?.installed || installConfig || pendingConfig) && (
-            <section aria-labelledby="permissions-title" className="panel panel-stack">
+            <section
+              aria-labelledby="permissions-title"
+              className="panel panel-stack"
+            >
               <h2 id="permissions-title">Allow remote assistance</h2>
               <p className="body-copy">
-                Enable RustDesk in Screen Recording and Accessibility in macOS settings.
+                Enable RustDesk in Screen Recording and Accessibility in macOS
+                settings.
               </p>
               <div className="button-row equal-buttons">
                 {[
@@ -1408,9 +1444,9 @@ function App() {
               <details className="disclosure">
                 <summary>Setup instructions</summary>
                 <p className="body-copy disclosure-content">
-                  Open RustDesk before changing permissions. If RustDesk is missing
-                  from the list, add it from Applications. Quit and reopen RustDesk
-                  after changing these permissions.
+                  Open RustDesk before changing permissions. If RustDesk is
+                  missing from the list, add it from Applications. Quit and
+                  reopen RustDesk after changing these permissions.
                 </p>
               </details>
             </section>

@@ -278,6 +278,21 @@ users can still open RustDesk and refresh; a failed clipboard copy leaves the ID
 selectable for manual copying. These controls do not register or reconnect the
 device. Successful hidden installer registration still closes the application.
 
+**Reconnect Device** on Windows clears `install.json` and `registration.json`
+in the current user's `%LOCALAPPDATA%\MagendaSupport` directory under the existing
+registration lock. It also discards any pending token in the UI, then waits for
+a new platform deep link. A per-user `ignore-legacy-install-config` marker prevents
+the old `%ProgramData%\Magendamd\install.json` fallback from restoring a token
+after restarting the app; the machine-wide file itself is left intact. The marker
+does not interfere with a new user config saved after successful registration.
+**Open Magenda Platform** keeps the app open during
+this flow and uses the previous connection's environment (production/dev/local).
+No registration request is sent until a new link arrives; a failed request can
+be retried with its new token. RustDesk, its ID and settings are preserved.
+An incoming link waits for a requested Windows reset even if it arrives before
+cleanup starts. Late browser-launch completion cannot close a newer connection flow.
+On macOS, reconnect continues to use the downloaded connection file.
+
 ## Validation
 
 ```sh

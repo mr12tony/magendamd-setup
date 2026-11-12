@@ -65,7 +65,7 @@ pub fn lock() -> Result<File, i32> {
 }
 
 pub fn clear_for_fresh_connection() -> Result<(), i32> {
-    // Called by Windows installers and the explicit macOS reconnect action.
+    // Called by Windows installers and explicit reconnect actions on both OSes.
     clear_in(&directory()?)
 }
 
@@ -77,6 +77,8 @@ fn clear_in(directory: &Path) -> Result<(), i32> {
 }
 
 fn clear_files_in(directory: &Path) -> Result<(), i32> {
+    #[cfg(target_os = "windows")]
+    platform::disable_legacy_install_config(directory)?;
     #[cfg(target_os = "macos")]
     let _config_write_lock = platform::lock_install_config_write().map_err(|_| 40)?;
     crate::registration_files::clear_files_in(directory)

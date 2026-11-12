@@ -67,6 +67,7 @@ function app(options = {}) {
   const dialogs = [];
   const questions = [];
   const clipboard = [];
+  const openedUrls = [];
   const timers = new Map();
   let timerId = 0;
   let activeConfig = options.config ?? null;
@@ -96,6 +97,7 @@ function app(options = {}) {
     dialogs,
     questions,
     clipboard,
+    openedUrls,
     get activeConfig() {
       return activeConfig;
     },
@@ -243,7 +245,7 @@ function app(options = {}) {
   }
 
   const window = {
-    setClosable: async () => {},
+    setClosable: async (closable) => options.setClosable?.(closable),
     setMinimizable: async () => {},
     setMaximizable: async () => {},
     setResizable: async () => {},
@@ -292,7 +294,12 @@ function app(options = {}) {
           return () => {};
         },
       },
-      "@tauri-apps/plugin-opener": { openUrl: async () => {} },
+      "@tauri-apps/plugin-opener": {
+        openUrl: async (url) => {
+          openedUrls.push(url);
+          await options.openUrl?.(url);
+        },
+      },
       "@tauri-apps/api/window": { getCurrentWindow: () => window },
       "@tauri-apps/plugin-os": { platform: () => options.platform ?? "macos" },
       "./system": {
@@ -402,6 +409,218 @@ test("macOS keeps the required RustDesk version without running setup again", as
     assert.equal(state.calls.some((call) => call.command === "read_downloaded_install_config"), false);
     assert.ok(state.button("Done"));
   }
+});
+
+test("Windows reconnect clears local state and waits for a platform link without registering", async () => {
+  const state = app({
+    platform: "windows",
+    config: config("OLD"),
+    saved: registered("Old computer"),
+  });
+  await state.idle();
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  assert.equal(state.activeConfig, null);
+  assert.equal(state.text.includes("Connected"), false);
+  assert.equal(state.button("Rename Device"), undefined);
+  assert.equal(state.button("Retry Connection"), undefined);
+  assert.ok(state.button("Open Magenda Platform"));
+  assert.ok(state.button("Open RustDesk"));
+  assert.equal(state.deviceId, "123456789");
+  assert.equal(state.closes, 0);
+  assert.equal(state.calls.filter((call) => call.command === "reset_installation_state").length, 1);
+  await state.focus();
+  await state.runTimers();
+  await state.idle();
+  assert.equal(state.text.includes("Connected"), false);
+  for (const command of ["register_device", "auto_register_device", "read_downloaded_install_config", "configure_rustdesk", "check_for_updates"]) {
+    assert.equal(state.calls.some((call) => call.command === command), false, command);
+  }
+});
+
+for (const [mode, origin] of [
+  ["prod", "https://app.magendamd.com"],
+  ["dev", "https://dev.magendamd.com"],
+  ["local", "http://127.0.0.1:3000"],
+  [null, "https://app.magendamd.com"],
+]) {
+  test(`Windows reconnect opens the ${mode ?? "default"} platform and stays ready for its link`, async () => {
+    const state = app({
+      platform: "windows",
+      config: mode ? config("OLD", mode) : null,
+      saved: mode ? registered() : null,
+    });
+    await state.idle();
+    await state.button("Reconnect Device").props.onClick();
+    await state.idle();
+    await state.button("Open Magenda Platform").props.onClick();
+    assert.deepEqual(state.openedUrls, [`${origin}?install=rustdesk`]);
+    assert.equal(state.closes, 0);
+    await state.links(link("NEW", "dev"));
+    await state.idle();
+    assert.deepEqual(state.activeConfig, config("NEW", "dev"));
+    assert.equal(manualCalls(state).length, 1);
+    assert.equal(manualCalls(state)[0].args.computerName, "Test computer");
+    assert.equal(state.closes, 1);
+  });
+}
+
+test("Windows reconnect reports cleanup failure and can retry without reusing the old token", async () => {
+  let fail = true;
+  const state = app({
+    platform: "windows",
+    config: config("OLD", "dev"),
+    saved: registered(),
+    reset: () => {
+      if (fail) throw "Cannot clear the previous installation data.";
+    },
+  });
+  await state.idle();
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  assert.match(state.dialogs.at(-1).text, /Cannot clear/);
+  assert.match(state.text, /Cannot clear/);
+  assert.equal(state.button("Rename Device"), undefined);
+  assert.equal(state.button("Retry Connection"), undefined);
+  assert.equal(manualCalls(state).length + autoCalls(state).length, 0);
+  fail = false;
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  assert.equal(state.activeConfig, null);
+  assert.doesNotMatch(state.text, /Cannot clear/);
+  await state.button("Open Magenda Platform").props.onClick();
+  assert.deepEqual(state.openedUrls, ["https://dev.magendamd.com?install=rustdesk"]);
+  assert.equal(state.closes, 0);
+});
+
+test("a Windows deep link arriving during reset registers after cleanup and is not lost", async () => {
+  const reset = deferred();
+  let resetting = false;
+  const state = app({
+    platform: "windows",
+    config: config("OLD"),
+    saved: registered(),
+    reset: () => {
+      resetting = true;
+      return reset.promise;
+    },
+  });
+  await state.idle();
+  const reconnect = state.button("Reconnect Device").props.onClick();
+  await until(() => resetting);
+  const manual = state.links(link("NEW", "dev"));
+  assert.equal(manualCalls(state).length, 0);
+  reset.resolve();
+  await Promise.all([reconnect, manual]);
+  await state.idle();
+  assert.deepEqual(state.activeConfig, config("NEW", "dev"));
+  assert.equal(manualCalls(state).length, 1);
+  assert.equal(autoCalls(state).length, 0);
+  assert.equal(state.closes, 1);
+});
+
+test("Windows reconnect discards a failed candidate and Retry uses only the next platform token", async () => {
+  let fail = true;
+  const state = app({
+    platform: "windows",
+    config: config("OLD"),
+    saved: registered(),
+    register: () => { if (fail) throw "Registration unavailable"; },
+  });
+  await state.idle();
+  await state.links(link("ABANDONED", "dev"));
+  await state.idle();
+  assert.ok(state.button("Retry Connection"));
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  assert.equal(state.button("Retry Connection"), undefined);
+  assert.equal(state.activeConfig, null);
+  await state.button("Open Magenda Platform").props.onClick();
+  assert.deepEqual(state.openedUrls, ["https://dev.magendamd.com?install=rustdesk"]);
+  await state.links(link("NEW", "local"));
+  await state.idle();
+  assert.equal(state.activeConfig, null);
+  assert.ok(state.button("Retry Connection"));
+  assert.equal(state.closes, 0);
+  fail = false;
+  await state.button("Retry Connection").props.onClick();
+  await state.idle();
+  assert.deepEqual(manualCalls(state).map((call) => call.args.token), ["ABANDONED", "NEW", "NEW"]);
+  assert.deepEqual(state.activeConfig, config("NEW", "local"));
+  assert.equal(state.closes, 1);
+});
+
+test("a platform launch completing late cannot close a failed Windows reconnection", async () => {
+  const browser = deferred();
+  const state = app({
+    platform: "windows",
+    config: config("OLD"),
+    saved: registered(),
+    openUrl: () => browser.promise,
+    register: () => { throw "Registration unavailable"; },
+  });
+  await state.idle();
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  const openPlatform = state.button("Open Magenda Platform").props.onClick();
+  await state.links(link("NEW"));
+  browser.resolve();
+  await openPlatform;
+  await state.idle();
+  assert.equal(state.closes, 0);
+  assert.ok(state.button("Retry Connection"));
+});
+
+for (const stage of ["queued", "unlocking"]) {
+  test(`a Windows link arriving while reconnect is ${stage} cannot skip the requested reset`, async () => {
+    const unlock = deferred();
+    let blockUnlock = false;
+    let unlocking = false;
+    const state = app({
+      platform: "windows",
+      config: config("OLD"),
+      saved: registered(),
+      setClosable: () => {
+        if (!blockUnlock) return;
+        unlocking = true;
+        return unlock.promise;
+      },
+      register: () => { throw "Registration unavailable"; },
+    });
+    await state.idle();
+    blockUnlock = stage === "unlocking";
+    const reconnect = state.button("Reconnect Device").props.onClick();
+    if (blockUnlock) await until(() => unlocking);
+    const manual = state.links(link("NEW", "dev"));
+    blockUnlock = false;
+    unlock.resolve();
+    await Promise.all([reconnect, manual]);
+    await state.idle();
+    const commands = state.calls.map((call) => call.command);
+    assert.equal(commands.filter((command) => command === "reset_installation_state").length, 1);
+    assert.ok(commands.indexOf("reset_installation_state") < commands.indexOf("register_device"));
+    assert.equal(state.activeConfig, null);
+    assert.equal(manualCalls(state)[0].args.token, "NEW");
+    assert.ok(state.button("Retry Connection"));
+    assert.equal(state.closes, 0);
+  });
+}
+
+test("a platform opening started before Windows reconnect cannot close the waiting app", async () => {
+  const browser = deferred();
+  const state = app({
+    platform: "windows",
+    openUrl: () => browser.promise,
+  });
+  await state.idle();
+  const openPlatform = state.button("Open Magenda Platform").props.onClick();
+  await state.button("Reconnect Device").props.onClick();
+  await state.idle();
+  browser.resolve();
+  await openPlatform;
+  assert.equal(state.closes, 0);
+  assert.equal(state.activeConfig, null);
+  assert.ok(state.button("Open Magenda Platform"));
 });
 
 test("macOS reconnect clears the old account before discovery and saves only after API success", async () => {

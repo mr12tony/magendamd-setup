@@ -23,6 +23,14 @@ mod macos;
 mod headless;
 
 #[cfg(any(target_os = "windows", test))]
+mod windows_install_config;
+
+#[cfg(target_os = "windows")]
+pub(crate) fn disable_legacy_install_config(directory: &std::path::Path) -> Result<(), i32> {
+    windows_install_config::disable_legacy_fallback(directory)
+}
+
+#[cfg(any(target_os = "windows", test))]
 mod windows_rustdesk;
 
 #[cfg(target_os = "windows")]

@@ -2,7 +2,7 @@ use super::RustDeskPermissionsStatus;
 use super::RustDeskStatus;
 use super::windows_rustdesk::find_rustdesk_exe;
 
-use serde::{Deserialize, Serialize};
+pub use super::windows_install_config::{InstallConfig, InstallMode};
 
 use std::{
     fs,
@@ -14,20 +14,6 @@ const ID_SERVER: &str = "rustdesk.magendamd.com";
 const RELAY_SERVER: &str = "rustdesk.magendamd.com";
 const RENDEZVOUS_PORT: &str = "21116";
 const RUSTDESK_KEY: &str = "+Li02oekgNMPX9Aa6jPAJhJCE7Cuu6kmP1zB6nMpKMc=";
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InstallMode {
-    Dev,
-    Prod,
-    Local,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct InstallConfig {
-    pub install_token: String,
-    pub mode: InstallMode,
-}
 
 // ============================================================
 // INSTALL TOKEN
@@ -53,49 +39,11 @@ fn user_install_config_path() -> Result<PathBuf, String> {
         .join("install.json"))
 }
 
-fn read_install_config(
-    path: &Path,
-) -> Result<Option<InstallConfig>, String> {
-    let content = match fs::read(path) {
-        Ok(content) => content,
-
-        Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound =>
-        {
-            return Ok(None);
-        }
-
-        Err(_) => {
-            return Err("Cannot read installation configuration.".to_owned());
-        }
-    };
-
-    let config: InstallConfig = serde_json::from_slice(&content)
-        .map_err(|_| {
-            "Invalid installation configuration.".to_owned()
-        })?;
-
-    let token = config.install_token.trim();
-
-    if token.is_empty()
-        || !token
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err("Invalid installation token.".to_owned());
-    }
-
-    Ok(Some(config))
-}
-
 pub fn get_install_config() -> Result<Option<InstallConfig>, String> {
-    let user_path = user_install_config_path()?;
-
-    if let Some(config) = read_install_config(&user_path)? {
-        return Ok(Some(config));
-    }
-
-    read_install_config(&install_config_path()?)
+    super::windows_install_config::get_install_config(
+        &user_install_config_path()?,
+        install_config_path,
+    )
 }
 
 pub fn save_install_config(
