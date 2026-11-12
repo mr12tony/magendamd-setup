@@ -14,6 +14,42 @@ import "./App.css";
 
 const REQUIRED_RUSTDESK_VERSION = "1.5.0";
 
+const PROCESSING_TEXT = {
+  initialize: "Loading device information...",
+  connect: "Connecting your device...",
+  rename: "Updating computer name...",
+  reconnect: "Reconnecting your device...",
+  reset: "Clearing saved connection...",
+  readConnection: "Reading connection file...",
+  configureRustDesk: "Setting up RustDesk...",
+  update: "Downloading and installing update...",
+};
+
+type ProcessingOperation = keyof typeof PROCESSING_TEXT;
+
+const REGISTRATION_MESSAGES = {
+  connect: {
+    success: "This device has been successfully connected to support.",
+    successTitle: "Device connected",
+    error: "Failed to connect the device.",
+    errorTitle: "Connection failed",
+  },
+  rename: {
+    success: "The computer name has been updated.",
+    successTitle: "Device renamed",
+    error: "Failed to update the computer name.",
+    errorTitle: "Rename failed",
+  },
+  reconnect: {
+    success: "This device has been successfully reconnected to support.",
+    successTitle: "Device reconnected",
+    error: "Failed to reconnect the device.",
+    errorTitle: "Reconnection failed",
+  },
+};
+
+type RegistrationIntent = keyof typeof REGISTRATION_MESSAGES;
+
 type UpdateInfo = {
   available: boolean;
   version: string | null;
@@ -136,7 +172,12 @@ function App() {
 
   // const [supportMessage, setSupportMessage] = useState("");
 
-  const [processing, setProcessing] = useState(false);
+  const [registrationOperation, setRegistrationOperation] =
+    useState<ProcessingOperation | null>(null);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const processingOperation =
+    registrationOperation ?? (installingUpdate ? "update" : null);
+  const processing = processingOperation !== null;
 
   const [missingInstallToken, setMissingInstallToken] = useState(false);
 
@@ -148,6 +189,8 @@ function App() {
   const [pendingConfig, setPendingConfig] = useState<InstallConfig | null>(
     null,
   );
+  const [pendingIntent, setPendingIntent] =
+    useState<RegistrationIntent>("connect");
   const [connectionError, setConnectionError] = useState<string | null>(null);
   // Retain only the platform environment while Windows waits for a fresh link.
   const [windowsReconnectMode, setWindowsReconnectMode] =
@@ -265,15 +308,13 @@ function App() {
         return;
       }
 
-      setProcessing(true);
+      setInstallingUpdate(true);
 
       await invoke("download_and_install_update");
     } catch (err) {
       console.error("Updater failed:", err);
     } finally {
-      if (!registrationQueue.busy) {
-        setProcessing(false);
-      }
+      setInstallingUpdate(false);
     }
   }
 
@@ -401,7 +442,11 @@ function App() {
   // REGISTER DEVICE
   // ============================================================
 
-  async function registerDevice(config: InstallConfig, requestedName?: string) {
+  async function registerDevice(
+    config: InstallConfig,
+    intent: RegistrationIntent,
+    requestedName?: string,
+  ) {
     if (!config.install_token.trim()) {
       throw new Error("Installation token is missing.");
     }
@@ -411,6 +456,7 @@ function App() {
     let rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
 
     if (!isRustDeskHealthy(rustdeskStatus)) {
+      setRegistrationOperation("configureRustDesk");
       await invoke("configure_rustdesk");
 
       rustdeskStatus = await invoke<RustDeskStatus>("get_rustdesk_status");
@@ -422,6 +468,7 @@ function App() {
 
     setStatus(rustdeskStatus);
 
+    setRegistrationOperation(intent);
     const registrationData = await invoke<RegistrationData>("register_device", {
       computerName: name,
       token: config.install_token,
@@ -442,24 +489,34 @@ function App() {
 
   async function runRegistrationTask(
     task: (isLatest: () => boolean) => Promise<void>,
+    operation: ProcessingOperation,
     manual = false,
   ) {
-    setProcessing(true);
+    if (!registrationQueue.busy) setRegistrationOperation(operation);
     try {
-      await registrationQueue.enqueue(task, manual);
+      await registrationQueue.enqueue((isLatest) => {
+        // A queued request must not change the label of the running operation.
+        setRegistrationOperation(operation);
+        return task(isLatest);
+      }, manual);
     } finally {
       if (!registrationQueue.busy) {
-        setProcessing(false);
+        setRegistrationOperation(null);
       }
     }
   }
 
-  async function requestRegistration(config: InstallConfig) {
+  async function requestRegistration(
+    config: InstallConfig,
+    intent: RegistrationIntent = "connect",
+  ) {
     setPendingConfig(config);
+    setPendingIntent(intent);
     setConnectionError(null);
 
     await runRegistrationTask(
-      (isLatest) => completeRegistration(config, isLatest),
+      (isLatest) => completeRegistration(config, isLatest, intent),
+      intent,
       true,
     );
   }
@@ -467,23 +524,26 @@ function App() {
   async function completeRegistration(
     config: InstallConfig,
     isLatest: () => boolean,
+    intent: RegistrationIntent,
     requestedName?: string,
   ) {
+    const messages = REGISTRATION_MESSAGES[intent];
+    setRegistrationOperation(intent);
     try {
       if (platform() === "windows") {
         await showWindow();
       } else {
         await unlockWindow();
       }
-      await registerDevice(config, requestedName);
+      await registerDevice(config, intent, requestedName);
 
       if (!isLatest()) {
         return;
       }
 
       setPendingConfig(null);
-      await message("This device has been successfully connected to support.", {
-        title: "Device registered",
+      await message(messages.success, {
+        title: messages.successTitle,
         kind: "info",
       });
 
@@ -496,8 +556,8 @@ function App() {
         return;
       }
 
-      await message(getErrorMessage(err, "Failed to register the device."), {
-        title: "Device registration error",
+      await message(getErrorMessage(err, messages.error), {
+        title: messages.errorTitle,
         kind: "error",
       });
     }
@@ -510,13 +570,19 @@ function App() {
       return;
     }
 
-    await requestRegistration(config);
+    const intent = pendingConfig
+      ? pendingIntent
+      : registration
+        ? "rename"
+        : "connect";
+    await requestRegistration(config, intent);
   }
 
   function clearConnectionState() {
     setInstallConfig(null);
     setRegistration(null);
     setPendingConfig(null);
+    setPendingIntent("connect");
     setConnectionError(null);
     setMissingInstallToken(true);
     setComputerName("");
@@ -554,6 +620,7 @@ function App() {
         // Windows waits for a new platform link; never reuse Downloads or an old token.
         if (isWindows) return;
 
+        setRegistrationOperation("readConnection");
         const config = await invoke<InstallConfig | null>(
           "read_downloaded_install_config",
         );
@@ -567,6 +634,7 @@ function App() {
         }
 
         setPendingConfig(config);
+        setPendingIntent("reconnect");
         setMissingInstallToken(false);
         const info = await getSystemInfo().catch(() => null);
         if (!isLatest()) return;
@@ -576,7 +644,7 @@ function App() {
           await message(
             "Please enter a computer name and retry the connection.",
             {
-              title: "Device registration",
+              title: "Reconnect device",
               kind: "info",
             },
           );
@@ -584,17 +652,22 @@ function App() {
         }
 
         // Manual registration always sends an API upsert, even for the same token.
-        await completeRegistration(config, isLatest, name);
+        await completeRegistration(config, isLatest, "reconnect", name);
       } catch (err) {
         if (!isLatest()) return;
-        const error = getErrorMessage(err, "Failed to reconnect the device.");
+        const error = getErrorMessage(
+          err,
+          isWindows
+            ? "Failed to clear the saved connection."
+            : "Failed to reconnect the device.",
+        );
         setConnectionError(error);
         await message(error, {
-          title: "Device registration error",
+          title: isWindows ? "Connection reset failed" : "Reconnection failed",
           kind: "error",
         });
       }
-    }, true);
+    }, "reset", true);
   }
 
   async function registerFromInstaller(
@@ -608,6 +681,7 @@ function App() {
 
     let resetComplete = false;
     try {
+      setRegistrationOperation("reset");
       await invoke("reset_installation_state");
       if (!isLatest()) return;
       resetComplete = true;
@@ -625,6 +699,7 @@ function App() {
       const wasVisible = await getCurrentWindow().isVisible();
       if (!isLatest()) return;
 
+      setRegistrationOperation("connect");
       const result = await invoke<RegistrationData>("auto_register_device", {
         config: launch.config,
         force: true,
@@ -688,7 +763,7 @@ function App() {
       await invoke("clear_installer_launch", { requestId: launch.request_id });
       if (!isLatest()) return;
       await registerFromInstaller(launch, isLatest);
-    });
+    }, "reset");
   }
 
   // ============================================================
@@ -1095,6 +1170,7 @@ function App() {
           platform() === "macos" &&
           !hasRequiredRustDeskVersion(rustdeskStatus)
         ) {
+          setRegistrationOperation("configureRustDesk");
           await invoke("configure_rustdesk");
 
           if (disposed || !isLatest()) {
@@ -1108,6 +1184,7 @@ function App() {
           }
 
           assertRequiredRustDeskVersion(rustdeskStatus);
+          setRegistrationOperation("initialize");
         }
 
         if (disposed || !isLatest()) {
@@ -1136,6 +1213,7 @@ function App() {
           return;
         }
 
+        if (!existing) setRegistrationOperation("connect");
         const result =
           existing ?? (await invoke<RegistrationData>("auto_register_device"));
 
@@ -1157,7 +1235,7 @@ function App() {
           { title: "Magenda Support", kind: "error" },
         );
       }
-    });
+    }, "initialize");
 
     return () => {
       disposed = true;
@@ -1234,10 +1312,10 @@ function App() {
 
   return (
     <main className="app-shell">
-      {processing && (
+      {processingOperation && (
         <div className="processing-overlay" role="status" aria-live="polite">
           <div className="processing-spinner" aria-hidden="true" />
-          <span>Connecting your device...</span>
+          <span>{PROCESSING_TEXT[processingOperation]}</span>
         </div>
       )}
 
@@ -1344,8 +1422,9 @@ function App() {
               </div>
               {pendingConfig && !processing && (
                 <p className="notice">
-                  Connection not completed. Retry to finish connecting this
-                  computer.
+                  {pendingIntent === "rename"
+                    ? "Computer name was not updated. Retry to save the new name."
+                    : "Connection not completed. Retry to finish connecting this computer."}
                 </p>
               )}
               <label htmlFor="computerName" className="field-label">
@@ -1374,7 +1453,9 @@ function App() {
                   className={`control-button ${registration && !pendingConfig ? "button-secondary" : "button-primary"}`}
                 >
                   {pendingConfig
-                    ? "Retry Connection"
+                    ? pendingIntent === "rename"
+                      ? "Retry Rename"
+                      : "Retry Connection"
                     : registration
                       ? "Rename Device"
                       : "Register Device"}

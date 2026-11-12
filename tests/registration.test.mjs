@@ -113,8 +113,14 @@ function app(options = {}) {
     get text() {
       return content(tree);
     },
+    get loadingText() {
+      const overlay = nodes(tree).find(
+        (node) => node.props?.className === "processing-overlay",
+      );
+      return overlay ? content(overlay) : null;
+    },
     get busy() {
-      return state.text.includes("Connecting your device...");
+      return state.loadingText !== null;
     },
     links: (...urls) => linkListener(urls),
     installer: (launch) => {
@@ -129,6 +135,8 @@ function app(options = {}) {
       nodes(tree).find(
         (node) => node.type === "button" && content(node) === label,
       ),
+    input: (id) =>
+      nodes(tree).find((node) => node.type === "input" && node.props.id === id),
     get deviceId() {
       return nodes(tree).find((node) => node.props?.id === "rustdeskId")?.props.value;
     },
@@ -188,7 +196,7 @@ function app(options = {}) {
           ? options.update()
           : { available: true, version: "0.0.6", notes: null };
       case "download_and_install_update":
-        return;
+        return options.installUpdate?.();
       case "get_installer_launch":
         return options.readInstaller
           ? options.readInstaller(installer)
@@ -428,6 +436,7 @@ test("Windows reconnect clears local state and waits for a platform link without
   assert.ok(state.button("Open RustDesk"));
   assert.equal(state.deviceId, "123456789");
   assert.equal(state.closes, 0);
+  assert.equal(state.dialogs.length, 0);
   assert.equal(state.calls.filter((call) => call.command === "reset_installation_state").length, 1);
   await state.focus();
   await state.runTimers();
@@ -508,7 +517,10 @@ test("a Windows deep link arriving during reset registers after cleanup and is n
   await state.idle();
   const reconnect = state.button("Reconnect Device").props.onClick();
   await until(() => resetting);
+  assert.equal(state.loadingText, "Clearing saved connection...");
   const manual = state.links(link("NEW", "dev"));
+  await new Promise(setImmediate);
+  assert.equal(state.loadingText, "Clearing saved connection...");
   assert.equal(manualCalls(state).length, 0);
   reset.resolve();
   await Promise.all([reconnect, manual]);
@@ -1399,6 +1411,7 @@ test("an in-flight automatic registration finishes before the manual candidate",
   const automatic = deferred();
   const state = app({ config: config("A"), auto: () => automatic.promise });
   await until(() => autoCalls(state).length === 1);
+  assert.equal(state.loadingText, "Connecting your device...");
   const manual = state.links(link("B", "dev"));
   assert.equal(manualCalls(state).length, 0);
   automatic.resolve();
@@ -1528,6 +1541,7 @@ test("a live manual link supersedes delayed startup discovery", async () => {
     },
   });
   await until(() => discovering);
+  assert.equal(state.loadingText, "Loading device information...");
   const b = state.links(link("B"));
   discovery.resolve([link("A")]);
   await b;
@@ -1553,6 +1567,7 @@ for (const [scenario, status] of [
     await until(() =>
       state.calls.some((call) => call.command === "configure_rustdesk"),
     );
+    assert.equal(state.loadingText, "Setting up RustDesk...");
     assert.equal(state.button("Open RustDesk").props.disabled, true);
     const b = state.links(link("B"));
     assert.equal(manualCalls(state).length, 0);
@@ -1619,6 +1634,153 @@ test("StrictMode effect replay does not duplicate startup or discard manual link
   assert.deepEqual(state.activeConfig, config("B"));
   assert.equal(manualCalls(state).length, 1);
 });
+
+for (const platform of ["windows", "macos"]) {
+  test(`${platform} rename keeps its operation on failure and retry`, async () => {
+    const first = deferred();
+    const retry = deferred();
+    let attempts = 0;
+    const state = app({
+      platform,
+      config: config("ACTIVE"),
+      saved: registered("Old name"),
+      register: () => (++attempts === 1 ? first.promise : retry.promise),
+    });
+    await state.idle();
+    state.input("computerName").props.onChange({ target: { value: "Reception" } });
+    await new Promise(setImmediate);
+
+    const rename = state.button("Rename Device").props.onClick();
+    await until(() => manualCalls(state).length === 1);
+    assert.equal(state.loadingText, "Updating computer name...");
+    first.reject("Server unavailable");
+    await rename;
+    await state.idle();
+    assert.equal(state.dialogs.at(-1).title, "Rename failed");
+    assert.equal(state.dialogs.at(-1).text, "Server unavailable");
+    assert.match(state.text, /Computer name was not updated/);
+    assert.equal(state.button("Retry Connection"), undefined);
+
+    const retried = state.button("Retry Rename").props.onClick();
+    await until(() => manualCalls(state).length === 2);
+    assert.equal(state.loadingText, "Updating computer name...");
+    retry.resolve();
+    await retried;
+    await state.idle();
+    assert.deepEqual(state.dialogs.at(-1), {
+      text: "The computer name has been updated.",
+      title: "Device renamed",
+      kind: "info",
+    });
+    assert.deepEqual(manualCalls(state).map(({ args }) => args.computerName), [
+      "Reception", "Reception",
+    ]);
+    assert.equal(state.input("computerName").props.value, "Reception");
+    assert.ok(state.button("Rename Device"));
+  });
+}
+
+test("a link queued during rename changes the label only when its connection starts", async () => {
+  const renameApi = deferred();
+  const connectionApi = deferred();
+  const state = app({
+    config: config("ACTIVE"),
+    saved: registered(),
+    register: ({ token }) => token === "ACTIVE" ? renameApi.promise : connectionApi.promise,
+  });
+  await state.idle();
+  const rename = state.button("Rename Device").props.onClick();
+  await until(() => manualCalls(state).length === 1);
+  const connection = state.links(link("NEW"));
+  await new Promise(setImmediate);
+  assert.equal(state.loadingText, "Updating computer name...");
+
+  renameApi.resolve();
+  await rename;
+  await until(() => manualCalls(state).length === 2);
+  assert.equal(state.loadingText, "Connecting your device...");
+  assert.equal(state.dialogs.length, 0);
+  connectionApi.resolve();
+  await connection;
+  await state.idle();
+  assert.equal(state.dialogs.length, 1);
+  assert.equal(state.dialogs[0].title, "Device connected");
+  assert.match(state.dialogs[0].text, /successfully connected to support/);
+});
+
+test("macOS reconnect labels cleanup, connection file and API stages separately", async () => {
+  const reset = deferred();
+  const download = deferred();
+  const api = deferred();
+  const retry = deferred();
+  let attempts = 0;
+  const state = app({
+    config: config("OLD"),
+    saved: registered(),
+    reset: () => reset.promise,
+    download: () => download.promise,
+    register: () => (++attempts === 1 ? api.promise : retry.promise),
+  });
+  await state.idle();
+  const reconnect = state.button("Reconnect Device").props.onClick();
+  await until(() => state.loadingText === "Clearing saved connection...");
+  reset.resolve();
+  await until(() => state.loadingText === "Reading connection file...");
+  download.resolve(config("NEW"));
+  await until(() => manualCalls(state).length === 1);
+  assert.equal(state.loadingText, "Reconnecting your device...");
+  assert.equal(state.dialogs.length, 0);
+  api.reject("Server unavailable");
+  await reconnect;
+  await state.idle();
+  assert.equal(state.dialogs.at(-1).title, "Reconnection failed");
+
+  // Retry reuses the candidate and retains the reconnect intent.
+  const retried = state.button("Retry Connection").props.onClick();
+  await until(() => manualCalls(state).length === 2);
+  assert.equal(state.loadingText, "Reconnecting your device...");
+  retry.resolve();
+  await retried;
+  await state.idle();
+  assert.equal(state.dialogs.at(-1).title, "Device reconnected");
+  assert.match(state.dialogs.at(-1).text, /successfully reconnected to support/);
+  assert.equal(state.calls.filter(({ command }) => command === "reset_installation_state").length, 1);
+});
+
+for (const finishesFirst of ["update", "connection"]) {
+  test(`overlapping update and connection keep the active label when ${finishesFirst} finishes first`, async () => {
+    const update = deferred();
+    const api = deferred();
+    const state = app({
+      config: config("ACTIVE"),
+      saved: registered(),
+      ask: () => true,
+      installUpdate: () => update.promise,
+      register: () => api.promise,
+    });
+    await state.idle();
+    await state.runTimers();
+    assert.equal(state.loadingText, "Downloading and installing update...");
+    const connection = state.links(link("NEW"));
+    await until(() => manualCalls(state).length === 1);
+    assert.equal(state.loadingText, "Connecting your device...");
+
+    if (finishesFirst === "update") {
+      update.resolve();
+      await new Promise(setImmediate);
+      assert.equal(state.loadingText, "Connecting your device...");
+      api.resolve();
+    } else {
+      api.resolve();
+      await connection;
+      await until(() => state.loadingText === "Downloading and installing update...");
+      update.resolve();
+    }
+    await connection;
+    await state.idle();
+    assert.equal(state.loadingText, null);
+  });
+}
 
 test("a rejected queue job does not lose the next request or clear busy early", async () => {
   const queue = new queueModule.RegistrationQueue();
